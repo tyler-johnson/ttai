@@ -1,0 +1,42 @@
+server:
+  replicaCount: 1
+
+  config:
+    persistence:
+      default:
+        driver: sql
+        sql:
+          driver: postgres12
+          host: postgresql
+          port: 5432
+          database: temporal
+          user: ttai
+          password: devpassword
+      visibility:
+        driver: sql
+        sql:
+          driver: postgres12
+          host: postgresql
+          port: 5432
+          database: temporal_visibility
+          user: ttai
+          password: devpassword
+
+cassandra:
+  enabled: false
+
+elasticsearch:
+  enabled: false  # Use SQL-based visibility instead
+
+postgresql:
+  enabled: false  # Use our own PostgreSQL
+
+web:
+  enabled: true
+  replicaCount: 1
+
+prometheus:
+  enabled: false
+
+grafana:
+  enabled: false

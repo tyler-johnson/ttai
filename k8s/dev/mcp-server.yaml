@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: ttai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+        - name: mcp-server
+          image: mcp-server
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: development
+            - name: REDIS_URL
+              value: redis://:devpassword@redis-master:6379
+            - name: TEMPORAL_ADDRESS
+              value: temporal-frontend:7233
+            - name: DATABASE_URL
+              value: postgresql://ttai:devpassword@postgresql:5432/ttai
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dev-secrets
+                  key: ANTHROPIC_API_KEY
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+  namespace: ttai
+spec:
+  selector:
+    app: mcp-server
+  ports:
+    - port: 3000
+      targetPort: 3000

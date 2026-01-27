@@ -1,0 +1,25 @@
+primary:
+  persistence:
+    enabled: true
+    size: 5Gi
+  initdb:
+    scripts:
+      init-temporal.sql: |
+        CREATE DATABASE temporal;
+        CREATE DATABASE temporal_visibility;
+        GRANT ALL PRIVILEGES ON DATABASE temporal TO ttai;
+        GRANT ALL PRIVILEGES ON DATABASE temporal_visibility TO ttai;
+
+auth:
+  postgresPassword: devpassword
+  database: ttai
+  username: ttai
+  password: devpassword
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m

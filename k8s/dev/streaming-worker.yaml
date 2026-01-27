@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streaming-worker
+  namespace: ttai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streaming-worker
+  template:
+    metadata:
+      labels:
+        app: streaming-worker
+    spec:
+      containers:
+        - name: streaming-worker
+          image: streaming-worker
+          env:
+            - name: REDIS_URL
+              value: redis://:devpassword@redis-master:6379
+            - name: TT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dev-secrets
+                  key: TT_CLIENT_SECRET
+            - name: TT_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dev-secrets
+                  key: TT_REFRESH_TOKEN
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
