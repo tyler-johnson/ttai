@@ -7,9 +7,14 @@ and processes tasks from the ttai-queue task queue.
 
 import asyncio
 import logging
-import os
 import signal
-from typing import NoReturn
+
+from temporalio.client import Client
+from temporalio.worker import Worker
+
+from activities.data_fetching import fetch_quote
+from config import get_settings
+from workflows.quote import GetQuoteWorkflow
 
 # Configure logging
 logging.basicConfig(
@@ -19,35 +24,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_worker() -> NoReturn:
+async def run_worker() -> None:
     """Run the Temporal worker."""
-    temporal_address = os.getenv("TEMPORAL_ADDRESS", "localhost:7233")
-    temporal_namespace = os.getenv("TEMPORAL_NAMESPACE", "default")
-    task_queue = os.getenv("TEMPORAL_TASK_QUEUE", "ttai-queue")
+    settings = get_settings()
 
-    logger.info(f"Starting Temporal worker...")
-    logger.info(f"  Address: {temporal_address}")
-    logger.info(f"  Namespace: {temporal_namespace}")
-    logger.info(f"  Task Queue: {task_queue}")
+    logger.info("Starting Temporal worker...")
+    logger.info(f"  Address: {settings.temporal_address}")
+    logger.info(f"  Namespace: {settings.temporal_namespace}")
+    logger.info(f"  Task Queue: {settings.temporal_task_queue}")
 
-    # TODO: Initialize Temporal client and worker
-    # from temporalio.client import Client
-    # from temporalio.worker import Worker
-    #
-    # client = await Client.connect(temporal_address, namespace=temporal_namespace)
-    # worker = Worker(
-    #     client,
-    #     task_queue=task_queue,
-    #     workflows=[...],
-    #     activities=[...],
-    # )
-    # await worker.run()
+    # Connect to Temporal server
+    client = await Client.connect(
+        settings.temporal_address,
+        namespace=settings.temporal_namespace,
+    )
+    logger.info("Connected to Temporal server")
 
-    # Placeholder: keep the worker running
-    logger.info("Worker stub running (no activities registered yet)")
-    while True:
-        await asyncio.sleep(60)
-        logger.debug("Worker heartbeat")
+    # Create and run the worker
+    worker = Worker(
+        client,
+        task_queue=settings.temporal_task_queue,
+        workflows=[GetQuoteWorkflow],
+        activities=[fetch_quote],
+    )
+
+    logger.info("Worker started, waiting for tasks...")
+    await worker.run()
 
 
 def main() -> None:

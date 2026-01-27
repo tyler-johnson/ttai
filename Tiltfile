@@ -25,6 +25,11 @@ allow_k8s_contexts("minikube")
 # =============================================================================
 
 k8s_yaml("k8s/dev/namespace.yaml")
+k8s_resource(
+    objects=["ttai:namespace"],
+    new_name="namespace",
+    labels=["setup"],
+)
 
 # =============================================================================
 # Secrets (auto-synced from .env.local)
@@ -34,6 +39,7 @@ local_resource(
     'dev-secrets',
     cmd='kubectl create secret generic dev-secrets --namespace=ttai --from-env-file=.env.local --dry-run=client -o yaml | kubectl apply -f -',
     deps=['.env.local'],
+    resource_deps=['namespace'],
     labels=['setup'],
 )
 
@@ -95,6 +101,14 @@ local_resource(
     labels=['deps'],
 )
 
+# Temporal namespace setup (creates 'default' namespace for workflows)
+k8s_yaml("k8s/dev/temporal-setup.yaml")
+k8s_resource(
+    "temporal-namespace-setup",
+    resource_deps=["temporal"],
+    labels=["setup"],
+)
+
 # =============================================================================
 # MCP Server (TypeScript)
 # =============================================================================
@@ -121,7 +135,7 @@ k8s_yaml("k8s/dev/mcp-server.yaml")
 k8s_resource(
     "mcp-server",
     port_forwards=["3000:3000"],
-    resource_deps=["dev-secrets", "redis", "temporal"],
+    resource_deps=["dev-secrets", "redis", "temporal-namespace-setup"],
     labels=["app"],
 )
 
@@ -155,7 +169,7 @@ docker_build(
 k8s_yaml("k8s/dev/python-worker.yaml")
 k8s_resource(
     "python-worker",
-    resource_deps=["dev-secrets", "redis", "postgresql", "temporal"],
+    resource_deps=["dev-secrets", "redis", "postgresql", "temporal-namespace-setup"],
     labels=["app"],
 )
 
