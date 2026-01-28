@@ -2,649 +2,400 @@
 
 ## Overview
 
-Local development uses `wrangler dev` to run Cloudflare Workers locally with full access to simulated KV, D1, R2, and Durable Objects. This provides a production-like development experience with hot-reload and integrated debugging.
+Local development for TTAI supports two workflows:
 
-## Architecture
+- **Sidecar Mode**: Full Tauri desktop app with Python MCP server as a subprocess
+- **Headless Mode**: Python MCP server running standalone, accessed by external clients
+
+This guide covers prerequisites, project setup, and development workflows for both modes.
+
+## Development Modes
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Local Development Environment                     │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                      wrangler dev                             │   │
-│  │  http://localhost:8787 (MCP Server)                           │   │
-│  │  http://localhost:8788 (Python Worker)                        │   │
-│  │  - Hot reload on file changes                                 │   │
-│  │  - Local bindings simulation                                  │   │
-│  │  - DevTools debugging                                         │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                       Miniflare                               │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │   │
-│  │  │   Local KV   │  │   Local D1   │  │  Local R2    │        │   │
-│  │  │  (in-memory) │  │   (SQLite)   │  │ (filesystem) │        │   │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘        │   │
-│  │                                                               │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │   │
-│  │  │   Durable    │  │    Queues    │  │  Vectorize   │        │   │
-│  │  │   Objects    │  │   (local)    │  │   (mock)     │        │   │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘        │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  External Services (dev mode):                                       │
-│  - TastyTrade: Sandbox environment (OAuth + API)                    │
-│  - LLM APIs: Real API keys                                          │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Local Development Options                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SIDECAR MODE (Full Desktop App)         HEADLESS MODE (Server Only)        │
+│  ┌────────────────────────────────┐     ┌────────────────────────────────┐  │
+│  │     pnpm tauri dev             │     │  python -m src.server.main     │  │
+│  │                                │     │     --transport sse            │  │
+│  │  ┌──────────────────────────┐  │     │                                │  │
+│  │  │      Vite Dev Server     │  │     │  ┌──────────────────────────┐  │  │
+│  │  │      localhost:5173      │  │     │  │     HTTP/SSE Server      │  │  │
+│  │  └──────────────────────────┘  │     │  │     localhost:8080       │  │  │
+│  │              │                 │     │  └──────────────────────────┘  │  │
+│  │  ┌──────────────────────────┐  │     │              │                 │  │
+│  │  │      Tauri Window        │  │     │              │                 │  │
+│  │  │       (WebView)          │  │     │              │                 │  │
+│  │  └──────────────────────────┘  │     │              ▼                 │  │
+│  │              │                 │     │  ┌──────────────────────────┐  │  │
+│  │              │ stdio           │     │  │   Claude Desktop         │  │  │
+│  │  ┌──────────────────────────┐  │     │  │   or other MCP client   │  │  │
+│  │  │    Python MCP Server     │  │     │  └──────────────────────────┘  │  │
+│  │  │      (Sidecar)           │  │     │                                │  │
+│  │  └──────────────────────────┘  │     └────────────────────────────────┘  │
+│  └────────────────────────────────┘                                          │
+│                                                                              │
+│  Use case: Desktop app development       Use case: Server/API development   │
+│            Full system testing                      Testing with Claude      │
+│            Settings UI iteration                    Quick iteration          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
 
-### Install Required Tools
+### Required Tools
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Python | 3.11+ | MCP server |
+| Git | 2.x | Version control |
+| Node.js | 20+ | Frontend tooling (sidecar mode only) |
+| pnpm | 8+ | Package manager (sidecar mode only) |
+| Rust | 1.75+ | Tauri backend (sidecar mode only) |
+
+### Platform-Specific Requirements
+
+#### macOS
 
 ```bash
-# Node.js (20+)
-brew install node
+# Install Xcode Command Line Tools
+xcode-select --install
 
-# Wrangler (Cloudflare CLI)
-npm install -g wrangler
+# Install Homebrew (if not installed)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Python (3.12+ for Python Workers)
-brew install python@3.12
+# Install Python via pyenv
+brew install pyenv
+pyenv install 3.11
+pyenv global 3.11
 
-# Optional: jq for JSON processing
-brew install jq
+# For sidecar mode only:
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install Node.js via nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+nvm install 20
+nvm use 20
+
+# Install pnpm
+npm install -g pnpm
 ```
 
-### Authenticate with Cloudflare
+#### Windows
+
+```powershell
+# Install Python
+# Download from https://python.org
+# Ensure "Add to PATH" is checked during installation
+
+# For sidecar mode only:
+# Install Visual Studio Build Tools
+# Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+# Select "Desktop development with C++"
+
+# Install Rust
+# Download rustup-init.exe from https://rustup.rs
+
+# Install Node.js
+# Download from https://nodejs.org (LTS version)
+
+# Install pnpm
+npm install -g pnpm
+```
+
+#### Linux (Ubuntu/Debian)
 
 ```bash
-# Login to Cloudflare (opens browser)
-wrangler login
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3.11 python3.11-venv python3-pip
 
-# Verify authentication
-wrangler whoami
+# For sidecar mode only:
+# Install system dependencies
+sudo apt-get install -y \
+    build-essential \
+    curl \
+    wget \
+    file \
+    libssl-dev \
+    libgtk-3-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    libwebkit2gtk-4.1-dev
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# Install Node.js via nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+source ~/.bashrc
+nvm install 20
+
+# Install pnpm
+npm install -g pnpm
 ```
 
-## Project Structure
+## Project Setup
 
-```
-ttai/
-├── workers/
-│   ├── mcp-server/              # TypeScript MCP server
-│   │   ├── src/
-│   │   │   ├── index.ts         # Worker entry point
-│   │   │   ├── server/          # MCP implementation
-│   │   │   ├── durableObjects/  # Durable Objects
-│   │   │   └── workflows/       # Cloudflare Workflows
-│   │   ├── wrangler.toml        # Worker configuration
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   │
-│   └── python-worker/           # Python worker
-│       ├── src/
-│       │   ├── main.py          # Worker entry point
-│       │   ├── handlers/        # Request handlers
-│       │   ├── agents/          # AI agents
-│       │   └── tastytrade/      # TastyTrade client
-│       ├── wrangler.toml        # Worker configuration
-│       └── requirements.txt
-│
-├── migrations/                   # D1 migrations
-│   └── *.sql
-│
-├── .dev.vars                     # Local secrets (gitignored)
-├── .dev.vars.example             # Example secrets file
-│
-└── scripts/
-    ├── dev.sh                    # Start development
-    └── seed.sh                   # Seed local data
-```
-
-## Environment Setup
-
-### Create Local Secrets File
+### 1. Clone the Repository
 
 ```bash
-# Copy example and fill in values
-cp .dev.vars.example .dev.vars
+git clone https://github.com/your-org/ttai.git
+cd ttai
 ```
+
+### 2. Install Python Dependencies
 
 ```bash
-# .dev.vars (gitignored)
+# Create and activate virtual environment
+cd src-python
+python -m venv .venv
 
-# JWT signing key (generate with: openssl rand -hex 32)
-JWT_SECRET=your-256-bit-hex-key
+# Activate venv
+# macOS/Linux:
+source .venv/bin/activate
+# Windows:
+.venv\Scripts\activate
 
-# TastyTrade OAuth (sandbox credentials)
-TASTYTRADE_CLIENT_ID=your-sandbox-client-id
-TASTYTRADE_CLIENT_SECRET=your-sandbox-secret
+# Install dependencies in development mode
+pip install -e ".[dev]"
 
-# LLM Provider API Keys (LiteLLM reads these automatically)
-# Set the key(s) for the provider(s) you want to use:
-
-# Anthropic (for anthropic/claude-* models)
-ANTHROPIC_API_KEY=sk-ant-...
-
-# OpenAI (for openai/gpt-* models)
-# OPENAI_API_KEY=sk-...
-
-# Google (for gemini/* models)
-# GOOGLE_API_KEY=...
-
-# AWS Bedrock (for bedrock/* models)
-# AWS_ACCESS_KEY_ID=...
-# AWS_SECRET_ACCESS_KEY=...
-# AWS_REGION_NAME=us-east-1
-
-# Encryption key for TastyTrade tokens (generate with: openssl rand -hex 32)
-TOKEN_ENCRYPTION_KEY=your-256-bit-hex-key
+# Return to project root
+cd ..
 ```
 
-### Create Local D1 Database
+### 3. Install Frontend Dependencies (Sidecar Mode Only)
 
 ```bash
-cd workers/mcp-server
-
-# Create local D1 database
-wrangler d1 create ttai-local --local
-
-# Apply migrations locally
-wrangler d1 migrations apply ttai --local
+# Install Node.js dependencies
+pnpm install
 ```
 
-### Create Local KV Namespace
+### 4. Verify Installation
 
 ```bash
-# KV is automatically created locally when you run wrangler dev
-# No explicit creation needed for local development
+# Check Python
+python --version
+pip --version
+
+# For sidecar mode:
+# Check Rust
+rustc --version
+cargo --version
+
+# Check Node.js/pnpm
+node --version
+pnpm --version
+
+# Check Tauri CLI
+pnpm tauri --version
 ```
 
-## Running Locally
+## Headless Development Workflow
 
-### Start MCP Server (TypeScript)
+Headless mode is the simplest way to develop and test the Python MCP server. Run the server standalone and connect with external MCP clients.
+
+### Running the Headless Server
 
 ```bash
-cd workers/mcp-server
+cd src-python
+source .venv/bin/activate
 
-# Start with hot reload
-wrangler dev
+# Run with HTTP/SSE transport
+python -m src.server.main --transport sse --port 8080
 
-# Output:
-# ⎔ Starting local server...
-# Ready on http://localhost:8787
+# With debug logging
+TTAI_LOG_LEVEL=DEBUG python -m src.server.main --transport sse --port 8080
+
+# Or use environment variables
+TTAI_TRANSPORT=sse TTAI_PORT=8080 python -m src.server.main
 ```
 
-### Start Python Worker
+The server will be available at `http://localhost:8080/sse`.
 
-```bash
-cd workers/python-worker
+### Connecting Claude Desktop
 
-# Start Python worker
-wrangler dev --port 8788
+Configure Claude Desktop to connect to your local server:
 
-# Output:
-# ⎔ Starting Python worker...
-# Ready on http://localhost:8788
-```
-
-### Run Both Workers Concurrently
-
-```bash
-# scripts/dev.sh
-#!/bin/bash
-
-# Start both workers in parallel
-(cd workers/mcp-server && wrangler dev) &
-(cd workers/python-worker && wrangler dev --port 8788) &
-
-# Wait for both
-wait
-```
-
-```bash
-# Make executable and run
-chmod +x scripts/dev.sh
-./scripts/dev.sh
-```
-
-## wrangler.toml for Development
-
-### MCP Server Configuration
-
-```toml
-# workers/mcp-server/wrangler.toml
-name = "ttai-mcp-server"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
-compatibility_flags = ["nodejs_compat"]
-
-# Local development settings
-[dev]
-port = 8787
-local_protocol = "http"
-
-# KV Namespaces
-[[kv_namespaces]]
-binding = "KV"
-id = "abc123"  # Production ID
-preview_id = "preview123"  # Preview/local ID
-
-# D1 Database
-[[d1_databases]]
-binding = "DB"
-database_name = "ttai"
-database_id = "your-d1-id"
-
-# For local development, wrangler creates a local SQLite file:
-# .wrangler/state/v3/d1/ttai/db.sqlite
-
-# R2 Bucket
-[[r2_buckets]]
-binding = "R2"
-bucket_name = "ttai-storage"
-preview_bucket_name = "ttai-storage-preview"
-
-# Durable Objects
-[[durable_objects.bindings]]
-name = "SESSIONS"
-class_name = "SessionDurableObject"
-
-[[durable_objects.bindings]]
-name = "PORTFOLIO_MONITOR"
-class_name = "PortfolioMonitor"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["SessionDurableObject", "PortfolioMonitor"]
-
-# Service Binding to Python Worker
-[[services]]
-binding = "PYTHON_WORKER"
-service = "ttai-python-worker"
-
-# Local development: service binding points to localhost
-[env.dev.services]
-binding = "PYTHON_WORKER"
-service = "ttai-python-worker"
-environment = "dev"
-
-# Environment variables
-[vars]
-ENVIRONMENT = "development"
-LOG_LEVEL = "debug"
-```
-
-### Python Worker Configuration
-
-```toml
-# workers/python-worker/wrangler.toml
-name = "ttai-python-worker"
-main = "src/main.py"
-compatibility_date = "2024-01-01"
-
-[dev]
-port = 8788
-local_protocol = "http"
-
-# KV for caching
-[[kv_namespaces]]
-binding = "KV"
-id = "abc123"
-
-# D1 for database
-[[d1_databases]]
-binding = "DB"
-database_name = "ttai"
-database_id = "your-d1-id"
-
-[vars]
-ENVIRONMENT = "development"
-DEFAULT_LLM_MODEL = "anthropic/claude-sonnet-4-20250514"
-```
-
-## Local D1 Database
-
-### Viewing Local Data
-
-```bash
-cd workers/mcp-server
-
-# Open SQLite shell
-wrangler d1 execute ttai --local --command "SELECT * FROM users LIMIT 10;"
-
-# Export to JSON
-wrangler d1 execute ttai --local --command "SELECT * FROM positions;" --json
-
-# Interactive SQL
-sqlite3 .wrangler/state/v3/d1/ttai/db.sqlite
-```
-
-### Running Migrations
-
-```bash
-# Apply all pending migrations
-wrangler d1 migrations apply ttai --local
-
-# Create a new migration
-wrangler d1 migrations create ttai add_new_table
-
-# List migrations
-wrangler d1 migrations list ttai --local
-```
-
-### Seeding Data
-
-```bash
-# scripts/seed.sh
-#!/bin/bash
-
-cd workers/mcp-server
-
-# Seed test user (TastyTrade account ID as primary key)
-wrangler d1 execute ttai --local --command "
-INSERT INTO users (id, email, created_at, updated_at)
-VALUES ('tt-account-123', 'test@example.com', unixepoch(), unixepoch());
-"
-
-# Seed test OAuth token (encrypted)
-wrangler d1 execute ttai --local --command "
-INSERT INTO user_oauth_tokens (user_id, provider, access_token, refresh_token, expires_at)
-VALUES ('tt-account-123', 'tastytrade', 'encrypted_access', 'encrypted_refresh', unixepoch() + 3600);
-"
-```
-
-## Local KV Cache
-
-### Inspecting KV Data
-
-```bash
-# List keys (local)
-wrangler kv:key list --binding KV --local
-
-# Get a value
-wrangler kv:key get --binding KV --local "quote:AAPL"
-
-# Put a value
-wrangler kv:key put --binding KV --local "test:key" "test value"
-
-# Delete a key
-wrangler kv:key delete --binding KV --local "test:key"
-```
-
-### KV Persistence Location
-
-```
-.wrangler/state/v3/kv/
-└── KV/
-    └── *.sqlite  # KV data stored in SQLite
-```
-
-## Local R2 Storage
-
-### R2 File Location
-
-```
-.wrangler/state/v3/r2/
-└── ttai-storage/
-    └── ...  # Files stored on filesystem
-```
-
-### Testing R2 Operations
-
-```bash
-# Upload a test file
-wrangler r2 object put ttai-storage/test/file.txt --file ./test.txt --local
-
-# Download a file
-wrangler r2 object get ttai-storage/test/file.txt --local
-
-# List objects
-wrangler r2 object list ttai-storage --local
-```
-
-## Local Durable Objects
-
-### Durable Object State Location
-
-```
-.wrangler/state/v3/do/
-└── SessionDurableObject/
-    └── *.sqlite  # Each DO instance has its own SQLite file
-```
-
-### Debugging Durable Objects
-
-```typescript
-// Add debug endpoints in development
-if (env.ENVIRONMENT === 'development') {
-  // Debug endpoint to inspect DO state
-  app.get('/debug/do/:name/:id', async (c) => {
-    const id = c.env.SESSIONS.idFromName(c.req.param('id'));
-    const stub = c.env.SESSIONS.get(id);
-    const response = await stub.fetch(new Request('http://internal/debug'));
-    return response;
-  });
+```json
+// ~/.config/claude/mcp.json (macOS/Linux)
+// %APPDATA%\Claude\mcp.json (Windows)
+{
+  "mcpServers": {
+    "ttai-dev": {
+      "url": "http://localhost:8080/sse",
+      "description": "TTAI Development Server"
+    }
+  }
 }
 ```
 
-## Local Queues
+Restart Claude Desktop to pick up the configuration.
 
-### Queue Simulation
+### Testing with curl
 
-Queues in local development are simulated by Miniflare:
+```bash
+# Check server health
+curl http://localhost:8080/health
 
-```typescript
-// Queue messages are processed immediately in local dev
-// To test queue behavior, add delay:
-export default {
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
-      console.log('Processing message:', message.body);
-      // Process message
-      message.ack();
-    }
-  },
-};
+# List available tools
+curl -X POST http://localhost:8080/messages \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST http://localhost:8080/messages \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_quote","arguments":{"symbol":"AAPL"}}}'
+```
+
+### Headless Environment Variables
+
+Create a `.env` file in `src-python/`:
+
+```bash
+# src-python/.env
+
+# Transport
+TTAI_TRANSPORT=sse
+TTAI_HOST=localhost
+TTAI_PORT=8080
+
+# Data directory (separate from production)
+TTAI_DATA_DIR=~/.ttai-dev
+
+# Logging
+TTAI_LOG_LEVEL=DEBUG
+
+# TastyTrade sandbox (for testing without real money)
+TASTYTRADE_API_URL=https://api.cert.tastyworks.com
+
+# Notifications (optional - for webhook testing)
+# TTAI_WEBHOOK_URL=http://localhost:9000/webhook
+
+# LLM provider (for AI agents)
+ANTHROPIC_API_KEY=sk-ant-xxx
+```
+
+## Sidecar Development Workflow
+
+Sidecar mode runs the full desktop application with hot-reload for frontend development. The frontend is a Settings interface for configuring credentials, preferences, and testing connections—trading analysis happens via MCP tools in external clients like Claude Desktop.
+
+### Running in Sidecar Mode
+
+```bash
+# Start the full development environment
+pnpm tauri dev
+```
+
+This command:
+1. Starts Vite dev server on http://localhost:5173
+2. Compiles the Rust code
+3. Launches the Tauri window
+4. Spawns the Python MCP server as sidecar (stdio transport)
+5. Enables hot reload for Svelte changes
+
+### Component-Specific Development
+
+#### Frontend Only (no Tauri)
+
+```bash
+# Run just the Svelte frontend
+pnpm dev
+```
+
+Access at http://localhost:5173. Useful for UI development without backend.
+
+#### Using a Separate Terminal for Python
+
+For easier Python debugging, run the Python server separately:
+
+```bash
+# Terminal 1: Frontend + Tauri (without auto-spawning sidecar)
+TTAI_SKIP_SIDECAR=true pnpm tauri dev
+
+# Terminal 2: Python server with verbose logging
+cd src-python
+source .venv/bin/activate
+TTAI_LOG_LEVEL=DEBUG python -m src.server.main
+```
+
+### Sidecar Environment Configuration
+
+Create a `.env.local` file in the project root:
+
+```bash
+# .env.local (not committed to git)
+
+# TastyTrade sandbox (for testing without real money)
+TASTYTRADE_API_URL=https://api.cert.tastyworks.com
+
+# LLM provider (for AI agents)
+ANTHROPIC_API_KEY=sk-ant-xxx
+
+# Debug mode
+TTAI_DEBUG=true
+TTAI_LOG_LEVEL=DEBUG
+
+# Development data directory (separate from production)
+TTAI_DATA_DIR=~/.ttai-dev
 ```
 
 ## Testing
 
-### Unit Tests with Vitest
-
-```typescript
-// workers/mcp-server/src/__tests__/tools.test.ts
-import { describe, it, expect, beforeAll } from 'vitest';
-import { unstable_dev } from 'wrangler';
-import type { UnstableDevWorker } from 'wrangler';
-
-describe('MCP Tools', () => {
-  let worker: UnstableDevWorker;
-
-  beforeAll(async () => {
-    worker = await unstable_dev('src/index.ts', {
-      experimental: { disableExperimentalWarning: true },
-    });
-  });
-
-  afterAll(async () => {
-    await worker.stop();
-  });
-
-  it('should return health check', async () => {
-    const response = await worker.fetch('/health');
-    expect(response.status).toBe(200);
-
-    const data = await response.json();
-    expect(data.status).toBe('healthy');
-  });
-
-  it('should require authentication', async () => {
-    const response = await worker.fetch('/mcp');
-    expect(response.status).toBe(401);
-  });
-});
-```
-
-### Integration Tests with Miniflare
-
-```typescript
-// workers/mcp-server/src/__tests__/integration.test.ts
-import { Miniflare } from 'miniflare';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-
-describe('Integration Tests', () => {
-  let mf: Miniflare;
-
-  beforeAll(async () => {
-    mf = new Miniflare({
-      modules: true,
-      scriptPath: 'dist/index.js',
-      kvNamespaces: ['KV'],
-      d1Databases: ['DB'],
-      durableObjects: {
-        SESSIONS: 'SessionDurableObject',
-      },
-    });
-  });
-
-  afterAll(async () => {
-    await mf.dispose();
-  });
-
-  it('should cache quote in KV', async () => {
-    const kv = await mf.getKVNamespace('KV');
-
-    // Simulate caching a quote
-    await kv.put('quote:AAPL', JSON.stringify({
-      symbol: 'AAPL',
-      price: 150.00,
-      timestamp: Date.now(),
-    }), { expirationTtl: 5 });
-
-    const cached = await kv.get('quote:AAPL', 'json');
-    expect(cached.symbol).toBe('AAPL');
-  });
-
-  it('should store user in D1', async () => {
-    const db = await mf.getD1Database('DB');
-
-    await db.exec(`
-      INSERT INTO users (id, email)
-      VALUES ('tt-account-123', 'test@test.com')
-    `);
-
-    const result = await db.prepare(
-      'SELECT * FROM users WHERE id = ?'
-    ).bind('tt-account-123').first();
-
-    expect(result.email).toBe('test@test.com');
-  });
-});
-```
-
-### Running Tests
+### Python Tests
 
 ```bash
-cd workers/mcp-server
+cd src-python
 
 # Run all tests
-npm test
+pytest tests/ -v
 
 # Run with coverage
-npm test -- --coverage
+pytest tests/ -v --cov=src --cov-report=html
 
 # Run specific test file
-npm test -- src/__tests__/tools.test.ts
+pytest tests/test_services/test_tastytrade.py -v
 
-# Watch mode
-npm test -- --watch
+# Run tests matching pattern
+pytest tests/ -v -k "test_quote"
 ```
 
-### Python Worker Tests
-
-```python
-# workers/python-worker/tests/test_handlers.py
-import pytest
-from unittest.mock import MagicMock, AsyncMock
-
-from src.handlers.quotes import handle_quote_request
-from src.tastytrade.client import TastyTradeClient
-
-
-@pytest.fixture
-def mock_env():
-    """Create mock Cloudflare environment."""
-    env = MagicMock()
-    env.KV = AsyncMock()
-    env.DB = AsyncMock()
-    return env
-
-
-@pytest.mark.asyncio
-async def test_quote_handler(mock_env):
-    """Test quote handler returns formatted data."""
-    # Mock KV cache miss
-    mock_env.KV.get = AsyncMock(return_value=None)
-
-    # Mock TastyTrade response
-    mock_client = AsyncMock(spec=TastyTradeClient)
-    mock_client.get_quote = AsyncMock(return_value={
-        'symbol': 'AAPL',
-        'last': 150.00,
-        'bid': 149.95,
-        'ask': 150.05,
-    })
-
-    result = await handle_quote_request(
-        symbol='AAPL',
-        env=mock_env,
-        client=mock_client,
-    )
-
-    assert result['symbol'] == 'AAPL'
-    assert result['price'] == 150.00
-```
+### Frontend Tests (Sidecar Mode)
 
 ```bash
-cd workers/python-worker
+# Run Svelte/TypeScript tests
+pnpm test
 
-# Run Python tests
-pytest
+# Run with coverage
+pnpm test:coverage
 
-# With coverage
-pytest --cov=src
+# Run in watch mode
+pnpm test:watch
+```
 
-# Verbose output
-pytest -v
+### Rust Tests (Sidecar Mode)
+
+```bash
+cd src-tauri
+
+# Run Rust tests
+cargo test
+
+# Run with output
+cargo test -- --nocapture
 ```
 
 ## Debugging
 
-### Enable Debug Logging
+### Python Debugging
 
-```bash
-# Set log level in .dev.vars
-LOG_LEVEL=debug
-
-# Or via command line
-LOG_LEVEL=debug wrangler dev
-```
-
-### Chrome DevTools
-
-```bash
-# Start with inspector
-wrangler dev --inspector-port 9229
-
-# Open Chrome and navigate to:
-# chrome://inspect
-# Click "inspect" under Remote Target
-```
-
-### VS Code Debugging
+#### VS Code Debugger
 
 ```json
 // .vscode/launch.json
@@ -652,219 +403,249 @@ wrangler dev --inspector-port 9229
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Worker",
-      "type": "node",
-      "request": "attach",
-      "port": 9229,
-      "cwd": "${workspaceFolder}/workers/mcp-server",
-      "resolveSourceMapLocations": [
-        "${workspaceFolder}/**",
-        "!**/node_modules/**"
-      ],
-      "skipFiles": ["<node_internals>/**"]
+      "name": "Debug Python Server (Headless)",
+      "type": "python",
+      "request": "launch",
+      "module": "src.server.main",
+      "args": ["--transport", "sse", "--port", "8080"],
+      "cwd": "${workspaceFolder}/src-python",
+      "env": {
+        "TTAI_LOG_LEVEL": "DEBUG"
+      },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Python Server (stdio)",
+      "type": "python",
+      "request": "launch",
+      "module": "src.server.main",
+      "cwd": "${workspaceFolder}/src-python",
+      "env": {
+        "TTAI_LOG_LEVEL": "DEBUG"
+      },
+      "console": "integratedTerminal"
     }
   ]
 }
 ```
 
-### Request Logging
+#### Debug with pdb
 
-```typescript
-// Add request logging middleware
-app.use('*', async (c, next) => {
-  const start = Date.now();
-  console.log(`→ ${c.req.method} ${c.req.url}`);
+```python
+# Add breakpoint in Python code
+import pdb; pdb.set_trace()
 
-  await next();
-
-  const duration = Date.now() - start;
-  console.log(`← ${c.res.status} ${duration}ms`);
-});
+# Or use built-in breakpoint() (Python 3.7+)
+breakpoint()
 ```
 
-## Service-to-Service Communication
+### Frontend Debugging (Sidecar Mode)
 
-### Local Service Bindings
-
-When both workers run locally, service bindings need manual configuration:
-
-```typescript
-// workers/mcp-server/src/services/python.ts
-export async function callPythonWorker(
-  env: Env,
-  endpoint: string,
-  body: unknown,
-): Promise<Response> {
-  // In development, use localhost
-  if (env.ENVIRONMENT === 'development') {
-    return fetch(`http://localhost:8788${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  }
-
-  // In production, use service binding
-  return env.PYTHON_WORKER.fetch(
-    new Request(`https://internal${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-  );
-}
-```
-
-## Testing MCP Connection
-
-### Test with curl
-
-```bash
-# Health check
-curl http://localhost:8787/health
-
-# MCP endpoint (requires session token from OAuth flow)
-curl -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <session-token>" \
-  -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
-
-# For local testing, generate a test JWT:
-# node -e "const jose = require('jose'); (async () => { const secret = new TextEncoder().encode('your-jwt-secret'); const jwt = await new jose.SignJWT({ sub: 'tt-account-123', email: 'test@example.com' }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('24h').sign(secret); console.log(jwt); })()"
-```
-
-### Test with Claude Desktop
+1. **Browser DevTools**: Right-click in the Tauri window → "Inspect Element"
+2. **VS Code Debugger**: Use the "Debug Tauri" launch configuration
 
 ```json
-// ~/.claude/claude_desktop_config.json
+// .vscode/launch.json
 {
-  "mcpServers": {
-    "ttai-dev": {
-      "command": "npx",
-      "args": [
-        "mcp-remote-client",
-        "http://localhost:8787/mcp"
-      ],
-      "env": {
-        "SESSION_TOKEN": "your-session-jwt-token"
-      }
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "chrome",
+      "request": "attach",
+      "name": "Debug Tauri",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/src"
     }
-  }
+  ]
 }
 ```
 
-## Hot Reload Behavior
-
-### TypeScript Worker
-
-- File changes trigger automatic rebuild
-- Worker restarts with new code
-- Durable Object state persists across restarts
-- KV/D1 data persists in `.wrangler/state/`
-
-### Python Worker
-
-- Python file changes trigger restart
-- No build step required
-- Dependencies require manual reinstall
+### Viewing Logs
 
 ```bash
-# After updating requirements.txt
-pip install -r requirements.txt
-# Then restart wrangler dev
+# Python server logs (when running separately)
+tail -f ~/.ttai-dev/logs/ttai-*.log
+
+# Tauri logs (macOS)
+tail -f ~/Library/Logs/com.ttai.app/main.log
+
+# All logs in one terminal
+multitail ~/.ttai-dev/logs/*.log
+```
+
+## Common Development Tasks
+
+### Adding a New MCP Tool
+
+1. Define the tool in `src-python/src/server/tools.py`:
+
+```python
+@server.tool()
+async def my_new_tool(param1: str, param2: int = 10) -> list[TextContent]:
+    """Description of what this tool does."""
+    result = await some_service.do_something(param1, param2)
+    return [TextContent(type="text", text=json.dumps(result))]
+```
+
+2. Test with headless server:
+
+```bash
+# Start server
+python -m src.server.main --transport sse --port 8080
+
+# Test the tool
+curl -X POST http://localhost:8080/messages \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_new_tool","arguments":{"param1":"test"}}}'
+```
+
+3. For sidecar mode, add Tauri command in `src-tauri/src/commands.rs`:
+
+```rust
+#[tauri::command]
+pub async fn my_new_tool(
+    mcp: State<'_, McpClient>,
+    param1: String,
+    param2: Option<i32>,
+) -> Result<Value, String> {
+    let args = serde_json::json!({
+        "param1": param1,
+        "param2": param2.unwrap_or(10),
+    });
+    mcp.call_tool("my_new_tool", args).await
+}
+```
+
+4. Export from frontend API in `src/lib/api.ts`:
+
+```typescript
+export async function myNewTool(param1: string, param2?: number): Promise<Result> {
+  return invoke('my_new_tool', { param1, param2 });
+}
+```
+
+### Testing Webhooks (Headless Mode)
+
+For testing notifications with webhooks:
+
+```bash
+# Terminal 1: Start a simple webhook receiver
+python -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers['Content-Length'])
+        data = json.loads(self.rfile.read(length))
+        print(json.dumps(data, indent=2))
+        self.send_response(200)
+        self.end_headers()
+
+HTTPServer(('', 9000), Handler).serve_forever()
+"
+
+# Terminal 2: Start TTAI server with webhook
+TTAI_WEBHOOK_URL=http://localhost:9000/webhook \
+python -m src.server.main --transport sse --port 8080
+```
+
+### Updating Dependencies
+
+```bash
+# Python dependencies
+cd src-python
+pip install --upgrade -e ".[dev]"
+
+# Frontend dependencies (sidecar mode)
+pnpm update
+
+# Rust dependencies (sidecar mode)
+cd src-tauri
+cargo update
+```
+
+### Running Linters
+
+```bash
+# Python
+cd src-python
+ruff check src/
+black src/
+mypy src/
+
+# Frontend (sidecar mode)
+pnpm lint
+pnpm format
+
+# Rust (sidecar mode)
+cd src-tauri
+cargo clippy
+cargo fmt
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-#### Port Already in Use
+#### "Address already in use" (Headless Mode)
+
+Another process is using port 8080:
 
 ```bash
-# Find process using port
-lsof -i :8787
+# Find the process
+lsof -i :8080
 
-# Kill the process
-kill -9 <PID>
-
-# Or use a different port
-wrangler dev --port 8790
+# Use a different port
+python -m src.server.main --transport sse --port 8081
 ```
 
-#### D1 Migration Errors
+#### "Sidecar not found" (Sidecar Mode)
+
+The Python sidecar binary is missing. Build it:
 
 ```bash
-# Reset local D1 database
-rm -rf .wrangler/state/v3/d1/
-
-# Recreate and apply migrations
-wrangler d1 migrations apply ttai --local
+cd src-python
+python scripts/build.py
 ```
 
-#### Stale Durable Object State
+#### Python import errors
+
+Ensure you're using the virtual environment:
 
 ```bash
-# Clear DO state
-rm -rf .wrangler/state/v3/do/
-
-# Restart wrangler dev
+cd src-python
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-#### Service Binding Connection Refused
+#### "Cannot connect to TastyTrade"
+
+Check your credentials and network. For development, use the sandbox API:
 
 ```bash
-# Ensure both workers are running
-# Check ports match configuration
-# Verify ENVIRONMENT=development is set
+export TASTYTRADE_API_URL=https://api.cert.tastyworks.com
 ```
 
-### Reset Local State
+#### WebKit errors on Linux (Sidecar Mode)
+
+Install WebKit dependencies:
 
 ```bash
-# Nuclear option: clear all local state
-rm -rf .wrangler/
-
-# Recreate databases
-wrangler d1 migrations apply ttai --local
-
-# Restart
-wrangler dev
+sudo apt-get install libwebkit2gtk-4.1-dev
 ```
 
-### Check Wrangler Version
+### Getting Help
 
-```bash
-# Update wrangler if issues persist
-npm install -g wrangler@latest
-
-# Verify version
-wrangler --version
-```
-
-## Performance Tips
-
-### Local Development Speed
-
-1. **Use `--local` flag**: Keeps all data local, no network calls
-2. **Disable remote bindings**: Comment out production IDs during development
-3. **Minimize D1 queries**: Use KV caching even in development
-4. **Run workers separately**: Start only the worker you're actively developing
-
-### Recommended Workflow
-
-```bash
-# Terminal 1: MCP Server (primary development)
-cd workers/mcp-server && wrangler dev
-
-# Terminal 2: Python Worker (as needed)
-cd workers/python-worker && wrangler dev --port 8788
-
-# Terminal 3: Run tests
-cd workers/mcp-server && npm test -- --watch
-```
+- Check existing issues on GitHub
+- Review the architecture docs in `/docs/architecture/`
+- Join the Discord community (link in README)
 
 ## Cross-References
 
-- [MCP Server Design](./01-mcp-server-design.md) - Server implementation
-- [Infrastructure](./08-infrastructure.md) - Production deployment
-- [Integration Patterns](./09-integration-patterns.md) - Service communication
+- [MCP Server Design](./01-mcp-server-design.md) - Dual-mode architecture
+- [Python Server](./03-python-server.md) - Python project structure, running modes
+- [Background Tasks](./06-background-tasks.md) - Notification backends for both modes
+- [Build and Distribution](./08-build-distribution.md) - Building release versions
+- [Integration Patterns](./09-integration-patterns.md) - Tauri ↔ Python and HTTP/SSE communication
+- [Frontend Architecture](./11-frontend.md) - Settings UI, Tailwind CSS, DaisyUI

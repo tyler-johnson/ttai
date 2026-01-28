@@ -2,734 +2,870 @@
 
 ## Overview
 
-This document covers communication patterns between Cloudflare components: Worker-to-Worker service bindings, TypeScript to Python Worker communication, Durable Object patterns, Queue message handling, and data serialization conventions.
+TTAI supports two integration modes, both using the MCP protocol:
 
-## Architecture
+- **Sidecar Mode**: Tauri desktop app spawns Python MCP server, communicating via stdio
+- **Headless Mode**: External clients connect to Python MCP server via HTTP/SSE
+
+Both modes provide the same MCP tools, resources, and prompts—the only difference is the transport layer.
+
+## Integration Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Integration Patterns                             │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  1. Service Bindings (Synchronous)                                  │
-│  ┌──────────────┐    fetch()    ┌──────────────┐                   │
-│  │  TypeScript  │ ────────────→ │    Python    │                   │
-│  │  MCP Server  │ ←──────────── │   Worker     │                   │
-│  └──────────────┘   Response    └──────────────┘                   │
-│                                                                      │
-│  2. Durable Objects (Stateful)                                      │
-│  ┌──────────────┐    fetch()    ┌──────────────┐                   │
-│  │   Worker     │ ────────────→ │   Durable    │                   │
-│  │              │ ←──────────── │    Object    │                   │
-│  └──────────────┘               └──────────────┘                   │
-│                                                                      │
-│  3. Queues (Async)                                                  │
-│  ┌──────────────┐    send()     ┌──────────────┐                   │
-│  │   Producer   │ ────────────→ │    Queue     │ → Consumer        │
-│  └──────────────┘               └──────────────┘                   │
-│                                                                      │
-│  4. KV/D1 (Shared State)                                           │
-│  ┌──────────────┐               ┌──────────────┐                   │
-│  │  Worker A    │ ←── KV/D1 ──→ │  Worker B    │                   │
-│  └──────────────┘               └──────────────┘                   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      TTAI Integration Patterns                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SIDECAR MODE                              HEADLESS MODE                    │
+│  ┌─────────────────────────────┐          ┌─────────────────────────────┐  │
+│  │     Tauri Desktop App       │          │   External MCP Clients      │  │
+│  │  ┌───────────────────────┐  │          │  ┌───────────────────────┐  │  │
+│  │  │   Settings UI         │  │          │  │   Claude Desktop      │  │  │
+│  │  └───────────┬───────────┘  │          │  │   Custom Apps         │  │  │
+│  │              │ IPC          │          │  │   Scripts             │  │  │
+│  │  ┌───────────┴───────────┐  │          │  └───────────┬───────────┘  │  │
+│  │  │   Rust Shell          │  │          │              │ HTTP         │  │
+│  │  │   (Sidecar Manager)   │  │          │              │              │  │
+│  │  └───────────┬───────────┘  │          └──────────────┼──────────────┘  │
+│  │              │ stdio        │                         │                  │
+│  └──────────────┼──────────────┘                         │                  │
+│                 │                                        │                  │
+│                 ▼                                        ▼                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                      Python MCP Server                                │  │
+│  │  ┌──────────────────────┐        ┌──────────────────────┐            │  │
+│  │  │   stdio Transport    │        │   HTTP/SSE Transport │            │  │
+│  │  │   (Sidecar mode)     │        │   (Headless mode)    │            │  │
+│  │  └──────────────────────┘        └──────────────────────┘            │  │
+│  │                                                                       │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                    MCP Protocol Layer                           │  │  │
+│  │  │  Tools | Resources | Prompts | Notifications                    │  │  │
+│  │  └────────────────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Worker-to-Worker Service Bindings
+## Sidecar Mode (Tauri ↔ Python)
 
-### Configuration
+### Architecture
 
-```toml
-# wrangler.toml (MCP Server)
-[[services]]
-binding = "PYTHON_WORKER"
-service = "ttai-python-worker"
+In sidecar mode, the Tauri Rust shell spawns the Python MCP server as a subprocess and communicates via stdio using JSON-RPC messages.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Tauri Desktop Application                          │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                  Settings UI (WebView)                           │ │
+│  │                                                                   │ │
+│  │  invoke('mcp_call_tool', { name: 'get_quote', args: {...} })    │ │
+│  │                              │                                    │ │
+│  └──────────────────────────────┼────────────────────────────────────┘ │
+│                                 │ Tauri IPC                           │
+│  ┌──────────────────────────────┼────────────────────────────────────┐ │
+│  │                  Rust Core   │                                    │ │
+│  │                              ▼                                    │ │
+│  │  ┌────────────────────────────────────────────────────────────┐  │ │
+│  │  │                   Sidecar Manager                          │  │ │
+│  │  │  - Spawn Python process                                    │  │ │
+│  │  │  - Route MCP requests via stdio                           │  │ │
+│  │  │  - Parse stderr for notifications                         │  │ │
+│  │  │  - Handle process lifecycle                               │  │ │
+│  │  └────────────────────────────────────────────────────────────┘  │ │
+│  │                              │                                    │ │
+│  │                              │ stdin/stdout (JSON-RPC)            │ │
+│  │                              │ stderr (notifications)             │ │
+│  └──────────────────────────────┼────────────────────────────────────┘ │
+│                                 │                                      │
+└─────────────────────────────────┼──────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Python MCP Server (Sidecar)                        │
+│                                                                       │
+│  stdin ──► MCP Protocol Handler ──► Tool Execution                   │
+│                                           │                           │
+│  stdout ◄─────────── Response ◄──────────┘                           │
+│                                                                       │
+│  stderr ◄─────────── Notifications (JSON lines)                      │
+│                                                                       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### TypeScript to Python Communication
+### Rust Sidecar Manager
 
-```typescript
-// src/services/pythonClient.ts
-export class PythonWorkerClient {
-  constructor(private fetcher: Fetcher) {}
+```rust
+// src-tauri/src/sidecar.rs
+use tauri::plugin::TauriPlugin;
+use tauri::{AppHandle, Runtime, Manager};
+use tauri_plugin_shell::ShellExt;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-  async getQuotes(symbols: string[], userId: string): Promise<Record<string, Quote>> {
-    const response = await this.fetcher.fetch(
-      new Request("https://internal/quotes", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Id": userId,
-        },
-        body: JSON.stringify({ symbols }),
-      })
-    );
+#[derive(Debug, Serialize, Deserialize)]
+struct McpRequest {
+    jsonrpc: String,
+    id: u64,
+    method: String,
+    params: Option<Value>,
+}
 
-    if (!response.ok) {
-      const error = await response.json<{ error: string }>();
-      throw new Error(error.error);
+#[derive(Debug, Serialize, Deserialize)]
+struct McpResponse {
+    jsonrpc: String,
+    id: u64,
+    result: Option<Value>,
+    error: Option<McpError>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct McpError {
+    code: i32,
+    message: String,
+    data: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Notification {
+    #[serde(rename = "type")]
+    notification_type: String,
+    title: String,
+    body: String,
+    data: Option<Value>,
+}
+
+pub struct SidecarManager {
+    process: Option<tokio::process::Child>,
+    stdin: Option<tokio::process::ChildStdin>,
+    request_id: u64,
+}
+
+impl SidecarManager {
+    pub fn new() -> Self {
+        Self {
+            process: None,
+            stdin: None,
+            request_id: 0,
+        }
     }
 
-    return response.json();
-  }
+    pub async fn start<R: Runtime>(
+        &mut self,
+        app: &AppHandle<R>
+    ) -> Result<(), String> {
+        let shell = app.shell();
 
-  async analyzeChart(
-    symbol: string,
-    userId: string,
-    timeframe: string = "daily"
-  ): Promise<ChartAnalysis> {
-    const response = await this.fetcher.fetch(
-      new Request("https://internal/analyze/chart", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Id": userId,
-        },
-        body: JSON.stringify({ symbol, timeframe }),
-      })
-    );
+        // Spawn the sidecar process
+        let sidecar = shell
+            .sidecar("ttai-server")
+            .map_err(|e| format!("Failed to create sidecar command: {}", e))?
+            .spawn()
+            .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
-    if (!response.ok) {
-      throw new Error(`Analysis failed: ${response.status}`);
+        let (mut rx, child) = sidecar;
+
+        // Store process handle
+        self.process = Some(child);
+
+        // Handle stdout (MCP responses)
+        let app_handle = app.clone();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                        // Parse and handle MCP response
+                        if let Ok(response) = serde_json::from_slice::<McpResponse>(&line) {
+                            // Route response to waiting caller
+                            app_handle.emit_all("mcp:response", response).ok();
+                        }
+                    }
+                    tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                        // Parse notifications from stderr
+                        if let Ok(text) = String::from_utf8(line) {
+                            if let Ok(notification) = serde_json::from_str::<Notification>(&text) {
+                                handle_notification(&app_handle, notification);
+                            }
+                        }
+                    }
+                    tauri_plugin_shell::process::CommandEvent::Error(e) => {
+                        log::error!("Sidecar error: {}", e);
+                    }
+                    tauri_plugin_shell::process::CommandEvent::Terminated(status) => {
+                        log::info!("Sidecar terminated with status: {:?}", status);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        Ok(())
     }
 
-    return response.json();
-  }
+    pub async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: Value
+    ) -> Result<Value, String> {
+        self.request_id += 1;
 
-  async analyzeOptions(
-    symbol: string,
-    userId: string,
-    chartContext: ChartAnalysis,
-    strategy: string = "csp"
-  ): Promise<OptionsAnalysis> {
-    const response = await this.fetcher.fetch(
-      new Request("https://internal/analyze/options", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Id": userId,
-        },
-        body: JSON.stringify({
-          symbol,
-          chartContext,
-          strategy,
-        }),
-      })
-    );
+        let request = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: self.request_id,
+            method: "tools/call".to_string(),
+            params: Some(serde_json::json!({
+                "name": name,
+                "arguments": arguments
+            })),
+        };
 
-    return response.json();
-  }
+        self.send_request(request).await
+    }
+
+    pub async fn read_resource(&mut self, uri: &str) -> Result<Value, String> {
+        self.request_id += 1;
+
+        let request = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: self.request_id,
+            method: "resources/read".to_string(),
+            params: Some(serde_json::json!({
+                "uri": uri
+            })),
+        };
+
+        self.send_request(request).await
+    }
+
+    async fn send_request(&mut self, request: McpRequest) -> Result<Value, String> {
+        let stdin = self.stdin.as_mut()
+            .ok_or("Sidecar not started")?;
+
+        let request_json = serde_json::to_string(&request)
+            .map_err(|e| format!("Failed to serialize request: {}", e))?;
+
+        stdin.write_all(request_json.as_bytes()).await
+            .map_err(|e| format!("Failed to write to sidecar: {}", e))?;
+        stdin.write_all(b"\n").await
+            .map_err(|e| format!("Failed to write newline: {}", e))?;
+        stdin.flush().await
+            .map_err(|e| format!("Failed to flush: {}", e))?;
+
+        // Response will come via the stdout handler
+        // In practice, you'd use a channel to wait for the response
+        Ok(serde_json::json!({"status": "pending", "id": request.id}))
+    }
+
+    pub async fn stop(&mut self) -> Result<(), String> {
+        if let Some(mut process) = self.process.take() {
+            process.kill().await
+                .map_err(|e| format!("Failed to kill sidecar: {}", e))?;
+        }
+        self.stdin = None;
+        Ok(())
+    }
+}
+
+fn handle_notification<R: Runtime>(app: &AppHandle<R>, notification: Notification) {
+    use tauri_plugin_notification::NotificationExt;
+
+    // Show OS notification
+    app.notification()
+        .builder()
+        .title(&notification.title)
+        .body(&notification.body)
+        .show()
+        .ok();
+
+    // Also emit to frontend for in-app display
+    app.emit_all("ttai:notification", &notification).ok();
 }
 ```
 
-### Python Request Handler
+### Tauri Commands
 
-```python
-# src/main.py
-from js import Response, Request
-import json
+```rust
+// src-tauri/src/commands.rs
+use tauri::{command, State, AppHandle, Runtime};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use serde_json::Value;
 
-async def on_fetch(request, env):
-    """Main entry point for Python Worker."""
-    url = request.url
-    path = url.split("/")[-1] if "/" in url else ""
-    user_id = request.headers.get("X-User-Id")
+use crate::sidecar::SidecarManager;
 
-    try:
-        body = json.loads(await request.text()) if request.method == "POST" else {}
+pub type SidecarState = Arc<RwLock<SidecarManager>>;
 
-        if path == "quotes":
-            return await handle_quotes(body, env, user_id)
-        elif path == "chart":
-            return await handle_chart_analysis(body, env, user_id)
-        elif path == "options":
-            return await handle_options_analysis(body, env, user_id)
-        else:
-            return json_response({"error": f"Unknown path: {path}"}, 404)
+#[command]
+pub async fn mcp_call_tool(
+    state: State<'_, SidecarState>,
+    name: String,
+    arguments: Value
+) -> Result<Value, String> {
+    let mut sidecar = state.write().await;
+    sidecar.call_tool(&name, arguments).await
+}
 
-    except Exception as e:
-        return json_response({"error": str(e)}, 500)
+#[command]
+pub async fn mcp_read_resource(
+    state: State<'_, SidecarState>,
+    uri: String
+) -> Result<Value, String> {
+    let mut sidecar = state.write().await;
+    sidecar.read_resource(&uri).await
+}
 
-def json_response(data, status=200):
-    return Response.new(
-        json.dumps(data),
-        status=status,
-        headers={"Content-Type": "application/json"}
-    )
-```
+#[command]
+pub async fn mcp_get_prompt(
+    state: State<'_, SidecarState>,
+    name: String,
+    arguments: Option<Value>
+) -> Result<Value, String> {
+    // Similar implementation
+    todo!()
+}
 
-## Durable Object Patterns
+#[command]
+pub async fn start_mcp_server(
+    app: AppHandle,
+    state: State<'_, SidecarState>
+) -> Result<(), String> {
+    let mut sidecar = state.write().await;
+    sidecar.start(&app).await
+}
 
-### Getting a Durable Object Instance
-
-```typescript
-// By name (deterministic ID)
-const id = env.PORTFOLIO_MONITOR.idFromName(userId);
-const monitor = env.PORTFOLIO_MONITOR.get(id);
-
-// By unique ID
-const id = env.SESSIONS.newUniqueId();
-const session = env.SESSIONS.get(id);
-
-// From string ID
-const id = env.SESSIONS.idFromString(sessionIdString);
-const session = env.SESSIONS.get(id);
-```
-
-### Making Requests to Durable Objects
-
-```typescript
-// src/services/monitorService.ts
-export class MonitorService {
-  constructor(private namespace: DurableObjectNamespace) {}
-
-  async startMonitor(
-    userId: string,
-    positions: Position[],
-    alertRules: AlertRule[]
-  ): Promise<void> {
-    const id = this.namespace.idFromName(userId);
-    const monitor = this.namespace.get(id);
-
-    await monitor.fetch(
-      new Request("https://internal/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          positions,
-          alertRules,
-          checkIntervalMs: 60000,
-        }),
-      })
-    );
-  }
-
-  async stopMonitor(userId: string): Promise<void> {
-    const id = this.namespace.idFromName(userId);
-    const monitor = this.namespace.get(id);
-
-    await monitor.fetch(
-      new Request("https://internal/stop", { method: "POST" })
-    );
-  }
-
-  async getStatus(userId: string): Promise<MonitorStatus> {
-    const id = this.namespace.idFromName(userId);
-    const monitor = this.namespace.get(id);
-
-    const response = await monitor.fetch(
-      new Request("https://internal/status")
-    );
-
-    return response.json();
-  }
+#[command]
+pub async fn stop_mcp_server(
+    state: State<'_, SidecarState>
+) -> Result<(), String> {
+    let mut sidecar = state.write().await;
+    sidecar.stop().await
 }
 ```
 
-### Durable Object Response Pattern
+### Frontend Integration
+
+The Settings UI uses the MCP client to manage configuration and test connections. Trading analysis happens via external MCP clients (like Claude Desktop), not through the desktop app's UI.
 
 ```typescript
-// src/durableObjects/base.ts
-export abstract class BaseDurableObject implements DurableObject {
-  constructor(
-    protected state: DurableObjectState,
-    protected env: Env
-  ) {}
+// src/lib/mcp-client.ts
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    try {
-      const handler = this.getHandler(url.pathname);
-      if (!handler) {
-        return this.notFound();
-      }
-
-      const result = await handler.call(this, request);
-      return this.json(result);
-    } catch (error) {
-      return this.error(error as Error);
-    }
-  }
-
-  protected abstract getHandler(path: string): ((req: Request) => Promise<any>) | null;
-
-  protected json(data: unknown, status = 200): Response {
-    return Response.json(data, { status });
-  }
-
-  protected notFound(): Response {
-    return Response.json({ error: "Not Found" }, { status: 404 });
-  }
-
-  protected error(err: Error): Response {
-    console.error("Durable Object error:", err);
-    return Response.json(
-      { error: err.message, retryable: true },
-      { status: 500 }
-    );
-  }
+export interface McpToolResult {
+  content: Array<{
+    type: 'text' | 'image';
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
 }
-```
 
-## Queue Message Patterns
-
-### Message Type Definitions
-
-```typescript
-// src/types/messages.ts
-export type QueueMessage =
-  | QuoteUpdateMessage
-  | AnalysisRequestMessage
-  | AnalysisCompleteMessage
-  | AlertTriggeredMessage
-  | NotificationMessage;
-
-interface BaseMessage {
+export interface McpNotification {
   type: string;
-  timestamp: number;
-  correlationId?: string;
-}
-
-export interface QuoteUpdateMessage extends BaseMessage {
-  type: "quote_update";
-  symbol: string;
-  price: number;
-  change: number;
-}
-
-export interface AnalysisRequestMessage extends BaseMessage {
-  type: "analysis_request";
-  userId: string;
-  symbol: string;
-  analysisType: "chart" | "options" | "full";
-}
-
-export interface AnalysisCompleteMessage extends BaseMessage {
-  type: "analysis_complete";
-  userId: string;
-  symbol: string;
-  workflowId: string;
-  recommendation: string;
-}
-
-export interface AlertTriggeredMessage extends BaseMessage {
-  type: "alert_triggered";
-  userId: string;
-  alertId: number;
-  symbol: string;
-  condition: string;
-  threshold: number;
-  currentValue: number;
-}
-
-export interface NotificationMessage extends BaseMessage {
-  type: "notification";
-  userId: string;
-  channel: "discord" | "email" | "push";
   title: string;
   body: string;
   data?: Record<string, unknown>;
 }
-```
 
-### Sending Messages
+class McpClient {
+  private notificationListeners: Array<(n: McpNotification) => void> = [];
 
-```typescript
-// src/services/queue.ts
-export class QueueService {
-  constructor(private queue: Queue<QueueMessage>) {}
-
-  async sendAnalysisRequest(
-    userId: string,
-    symbol: string,
-    analysisType: "chart" | "options" | "full"
-  ): Promise<void> {
-    await this.queue.send({
-      type: "analysis_request",
-      timestamp: Date.now(),
-      correlationId: crypto.randomUUID(),
-      userId,
-      symbol,
-      analysisType,
+  constructor() {
+    // Listen for notifications from Python server
+    listen<McpNotification>('ttai:notification', (event) => {
+      this.notificationListeners.forEach(fn => fn(event.payload));
     });
   }
 
-  async sendNotification(
-    userId: string,
-    channel: "discord" | "email" | "push",
-    title: string,
-    body: string
-  ): Promise<void> {
-    await this.queue.send({
-      type: "notification",
-      timestamp: Date.now(),
-      userId,
-      channel,
-      title,
-      body,
-    });
+  async callTool(name: string, arguments: Record<string, unknown>): Promise<McpToolResult> {
+    return invoke('mcp_call_tool', { name, arguments });
   }
 
-  // Batch send for efficiency
-  async sendBatch(messages: QueueMessage[]): Promise<void> {
-    const batches = [];
-    for (let i = 0; i < messages.length; i += 100) {
-      batches.push(messages.slice(i, i + 100));
-    }
-
-    for (const batch of batches) {
-      await this.queue.sendBatch(
-        batch.map((body) => ({ body }))
-      );
-    }
+  async readResource(uri: string): Promise<string> {
+    return invoke('mcp_read_resource', { uri });
   }
-}
-```
 
-### Consuming Messages
+  async getPrompt(name: string, arguments?: Record<string, unknown>): Promise<unknown> {
+    return invoke('mcp_get_prompt', { name, arguments });
+  }
 
-```typescript
-// src/index.ts
-export default {
-  async queue(
-    batch: MessageBatch<QueueMessage>,
-    env: Env,
-    ctx: ExecutionContext
-  ): Promise<void> {
-    const handlers: Record<string, (msg: any, env: Env) => Promise<void>> = {
-      analysis_request: handleAnalysisRequest,
-      analysis_complete: handleAnalysisComplete,
-      alert_triggered: handleAlertTriggered,
-      notification: handleNotification,
+  onNotification(callback: (notification: McpNotification) => void): () => void {
+    this.notificationListeners.push(callback);
+    return () => {
+      const idx = this.notificationListeners.indexOf(callback);
+      if (idx >= 0) this.notificationListeners.splice(idx, 1);
     };
-
-    for (const message of batch.messages) {
-      const handler = handlers[message.body.type];
-
-      if (!handler) {
-        console.warn(`Unknown message type: ${message.body.type}`);
-        message.ack();
-        continue;
-      }
-
-      try {
-        await handler(message.body, env);
-        message.ack();
-      } catch (error) {
-        console.error(`Failed to process message:`, error);
-
-        // Retry transient errors
-        if (message.body.timestamp > Date.now() - 3600000) {
-          message.retry({ delaySeconds: 30 });
-        } else {
-          // Too old, dead-letter
-          console.error("Message expired, dropping:", message.body);
-          message.ack();
-        }
-      }
-    }
-  },
-};
-```
-
-## Data Serialization
-
-### camelCase to snake_case Conversion
-
-```typescript
-// src/utils/serialization.ts
-export function toSnakeCase(obj: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = {};
-
-  for (const [key, value] of Object.entries(obj)) {
-    const snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
-
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      result[snakeKey] = toSnakeCase(value);
-    } else if (Array.isArray(value)) {
-      result[snakeKey] = value.map((item) =>
-        typeof item === "object" ? toSnakeCase(item) : item
-      );
-    } else {
-      result[snakeKey] = value;
-    }
   }
 
-  return result;
-}
-
-export function toCamelCase(obj: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = {};
-
-  for (const [key, value] of Object.entries(obj)) {
-    const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      result[camelKey] = toCamelCase(value);
-    } else if (Array.isArray(value)) {
-      result[camelKey] = value.map((item) =>
-        typeof item === "object" ? toCamelCase(item) : item
-      );
-    } else {
-      result[camelKey] = value;
-    }
+  // Configuration methods (used by Settings UI)
+  async getConfig(): Promise<McpToolResult> {
+    return this.callTool('get_config', {});
   }
 
-  return result;
+  async updateConfig(config: Record<string, unknown>): Promise<McpToolResult> {
+    return this.callTool('update_config', { config });
+  }
+
+  async testConnection(): Promise<McpToolResult> {
+    return this.callTool('test_connection', {});
+  }
 }
+
+export const mcpClient = new McpClient();
 ```
 
-### Usage in Service Calls
+## Headless Mode (HTTP/SSE)
 
-```typescript
-// TypeScript → Python (convert to snake_case)
-const response = await fetcher.fetch(
-  new Request("https://internal/analyze", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(toSnakeCase({
-      symbol: "AAPL",
-      timeframe: "daily",
-      chartContext: {
-        supportLevels: [150, 145],
-        resistanceLevels: [160, 165],
-      },
-    })),
-  })
-);
+### Architecture
 
-// Python response → TypeScript (convert to camelCase)
-const result = toCamelCase(await response.json());
-// result.supportLevels, result.resistanceLevels
+In headless mode, the Python MCP server runs standalone and accepts connections via HTTP/SSE from any MCP-compatible client.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                    External MCP Clients                               │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │
+│  │  Claude Desktop │  │  Custom App     │  │  CLI Script     │       │
+│  │                 │  │                 │  │                 │       │
+│  │  MCP Client     │  │  MCP Client     │  │  MCP Client     │       │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘       │
+│           │                    │                    │                 │
+│           └────────────────────┼────────────────────┘                 │
+│                                │ HTTP/SSE                             │
+└────────────────────────────────┼──────────────────────────────────────┘
+                                 │
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                Python MCP Server (Headless Mode)                      │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                     HTTP/SSE Transport                          │  │
+│  │                                                                 │  │
+│  │  GET /sse ───────────► SSE Connection ───────────► Events      │  │
+│  │  POST /messages ─────► Handle Message ───────────► Response    │  │
+│  │                                                                 │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                    MCP Protocol Layer                           │  │
+│  │                    (Same as sidecar mode)                       │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Python Side
+### HTTP/SSE Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sse` | GET | SSE connection endpoint for receiving events |
+| `/messages` | POST | Send MCP messages to the server |
+| `/health` | GET | Health check endpoint |
+
+### SSE Transport Implementation
 
 ```python
-# src/utils/case.py
-import re
+# src/server/transport/sse.py
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+import uvicorn
 
-def to_snake_case(obj):
-    """Convert camelCase keys to snake_case."""
-    if isinstance(obj, dict):
-        return {
-            re.sub(r'([A-Z])', r'_\1', k).lower().lstrip('_'): to_snake_case(v)
-            for k, v in obj.items()
-        }
-    elif isinstance(obj, list):
-        return [to_snake_case(item) for item in obj]
-    return obj
+class SseTransportManager:
+    """Manages HTTP/SSE transport for headless mode."""
 
-def to_camel_case(obj):
-    """Convert snake_case keys to camelCase."""
-    if isinstance(obj, dict):
-        return {
-            re.sub(r'_([a-z])', lambda m: m.group(1).upper(), k): to_camel_case(v)
-            for k, v in obj.items()
-        }
-    elif isinstance(obj, list):
-        return [to_camel_case(item) for item in obj]
-    return obj
+    def __init__(self, server, host: str = "localhost", port: int = 8080):
+        self.server = server
+        self.host = host
+        self.port = port
+        self.sse = SseServerTransport("/messages")
+
+    async def handle_sse(self, request):
+        """Handle SSE connection requests."""
+        async with self.sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await self.server.run(
+                streams[0], streams[1],
+                self.server.create_initialization_options()
+            )
+
+    async def handle_health(self, request):
+        """Health check endpoint."""
+        return JSONResponse({"status": "healthy"})
+
+    def create_app(self) -> Starlette:
+        """Create the ASGI application."""
+        return Starlette(
+            routes=[
+                Route("/sse", endpoint=self.handle_sse),
+                Route("/messages", endpoint=self.sse.handle_post_message, methods=["POST"]),
+                Route("/health", endpoint=self.handle_health),
+            ]
+        )
+
+    async def run(self):
+        """Start the SSE server."""
+        app = self.create_app()
+        config = uvicorn.Config(
+            app,
+            host=self.host,
+            port=self.port,
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
 ```
+
+### Claude Desktop Configuration
+
+To connect Claude Desktop to the headless TTAI server:
+
+```json
+// ~/.config/claude/mcp.json (macOS/Linux)
+// %APPDATA%\Claude\mcp.json (Windows)
+{
+  "mcpServers": {
+    "ttai": {
+      "url": "http://localhost:8080/sse",
+      "description": "TTAI Trading Analysis Server"
+    }
+  }
+}
+```
+
+### Custom Client Example
+
+```python
+# Example: Custom Python client connecting to headless server
+import httpx
+import json
+from sseclient import SSEClient
+
+class TtaiClient:
+    """Simple client for the TTAI MCP server."""
+
+    def __init__(self, base_url: str = "http://localhost:8080"):
+        self.base_url = base_url
+        self.client = httpx.Client()
+        self.request_id = 0
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        """Call an MCP tool."""
+        self.request_id += 1
+
+        message = {
+            "jsonrpc": "2.0",
+            "id": self.request_id,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments
+            }
+        }
+
+        response = self.client.post(
+            f"{self.base_url}/messages",
+            json=message
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_quote(self, symbol: str) -> dict:
+        """Get a quote for a symbol."""
+        return self.call_tool("get_quote", {"symbol": symbol})
+
+    def get_positions(self) -> dict:
+        """Get current positions."""
+        return self.call_tool("get_positions", {})
+
+    def analyze(self, symbol: str, strategy: str = "csp") -> dict:
+        """Run full analysis on a symbol."""
+        return self.call_tool("run_full_analysis", {
+            "symbol": symbol,
+            "strategy": strategy
+        })
+
+
+# Usage example
+if __name__ == "__main__":
+    client = TtaiClient()
+
+    # Get a quote
+    quote = client.get_quote("AAPL")
+    print(f"AAPL: ${quote['result']['content'][0]['text']}")
+
+    # Run analysis
+    analysis = client.analyze("NVDA")
+    print(f"Analysis: {analysis['result']['content'][0]['text']}")
+```
+
+## Authentication
+
+### Headless Mode Authentication
+
+For headless deployments, the server supports API key authentication:
+
+```python
+# src/server/auth.py
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+import os
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Middleware for API key authentication in headless mode."""
+
+    def __init__(self, app, api_key: str | None = None):
+        super().__init__(app)
+        self.api_key = api_key or os.getenv("TTAI_API_KEY")
+
+    async def dispatch(self, request, call_next):
+        # Skip auth for health endpoint
+        if request.url.path == "/health":
+            return await call_next(request)
+
+        # Skip if no API key configured (development mode)
+        if not self.api_key:
+            return await call_next(request)
+
+        # Check API key
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                {"error": "Missing or invalid Authorization header"},
+                status_code=401
+            )
+
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        if token != self.api_key:
+            return JSONResponse(
+                {"error": "Invalid API key"},
+                status_code=403
+            )
+
+        return await call_next(request)
+```
+
+### Using Authentication
+
+```bash
+# Set API key
+export TTAI_API_KEY=your-secret-key
+
+# Start server
+python -m src.server.main --transport sse --port 8080
+
+# Client request with authentication
+curl -X POST http://localhost:8080/messages \
+  -H "Authorization: Bearer your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+## Data Flow Comparison
+
+### Sidecar Mode Data Flow
+
+```
+User Action (Settings UI)
+        │
+        ▼
+┌───────────────────┐
+│  Settings Page    │
+│  invoke('mcp_call_tool', {...})
+└─────────┬─────────┘
+          │ Tauri IPC
+          ▼
+┌───────────────────┐
+│   Rust Command    │
+│   mcp_call_tool() │
+└─────────┬─────────┘
+          │ Write to stdin
+          ▼
+┌───────────────────┐
+│  Python MCP       │
+│  Server (stdio)   │
+└─────────┬─────────┘
+          │ Tool execution
+          ▼
+┌───────────────────┐
+│  TastyTrade API   │
+└─────────┬─────────┘
+          │ Response
+          ▼
+┌───────────────────┐
+│  Python MCP       │
+│  (writes stdout)  │
+└─────────┬─────────┘
+          │ Read stdout
+          ▼
+┌───────────────────┐
+│   Rust Handler    │
+│   (emit event)    │
+└─────────┬─────────┘
+          │ Tauri IPC
+          ▼
+┌───────────────────┐
+│  Settings Page    │
+│  (update UI)      │
+└───────────────────┘
+```
+
+### Headless Mode Data Flow
+
+```
+External MCP Client
+        │
+        ▼
+┌───────────────────┐
+│  HTTP POST        │
+│  /messages        │
+└─────────┬─────────┘
+          │
+          ▼
+┌───────────────────┐
+│  Python MCP       │
+│  Server (SSE)     │
+└─────────┬─────────┘
+          │ Tool execution
+          ▼
+┌───────────────────┐
+│  TastyTrade API   │
+└─────────┬─────────┘
+          │ Response
+          ▼
+┌───────────────────┐
+│  Python MCP       │
+│  (HTTP response)  │
+└─────────┬─────────┘
+          │
+          ▼
+┌───────────────────┐
+│  External Client  │
+│  (receives JSON)  │
+└───────────────────┘
+```
+
+## Notification Handling
+
+### Sidecar Mode (stderr → Tauri → OS)
+
+In sidecar mode, notifications flow from Python to the OS via Tauri:
+
+```python
+# Python side - write to stderr
+print(json.dumps(notification.to_dict()), file=sys.stderr, flush=True)
+```
+
+```rust
+// Rust side - read stderr and show OS notification
+fn handle_notification<R: Runtime>(app: &AppHandle<R>, notification: Notification) {
+    app.notification()
+        .builder()
+        .title(&notification.title)
+        .body(&notification.body)
+        .show()
+        .ok();
+}
+```
+
+### Headless Mode (Webhooks)
+
+In headless mode, notifications are delivered via HTTP webhooks:
+
+```python
+# Python side - POST to webhook URL
+async with httpx.AsyncClient() as client:
+    await client.post(webhook_url, json=notification.to_dict())
+```
+
+See [Background Tasks](./06-background-tasks.md) for the full notification backend implementation.
 
 ## Error Handling
 
-### Standardized Error Response
+### Transport-Agnostic Errors
 
-```typescript
-// src/types/errors.ts
-export interface ErrorResponse {
-  error: {
-    code: string;
-    message: string;
-    retryable: boolean;
-    details?: Record<string, unknown>;
-  };
-}
-
-export class ServiceError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public statusCode: number = 500,
-    public retryable: boolean = false,
-    public details?: Record<string, unknown>
-  ) {
-    super(message);
-  }
-
-  toResponse(): Response {
-    return Response.json(
-      {
-        error: {
-          code: this.code,
-          message: this.message,
-          retryable: this.retryable,
-          details: this.details,
-        },
-      },
-      { status: this.statusCode }
-    );
-  }
-}
-
-// Common error types
-export class ValidationError extends ServiceError {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super(message, "VALIDATION_ERROR", 400, false, details);
-  }
-}
-
-export class AuthenticationError extends ServiceError {
-  constructor(message: string = "Authentication required") {
-    super(message, "AUTHENTICATION_ERROR", 401, false);
-  }
-}
-
-export class NotFoundError extends ServiceError {
-  constructor(resource: string) {
-    super(`${resource} not found`, "NOT_FOUND", 404, false);
-  }
-}
-
-export class RateLimitError extends ServiceError {
-  constructor(retryAfter: number = 60) {
-    super(
-      `Rate limited. Retry after ${retryAfter}s`,
-      "RATE_LIMIT",
-      429,
-      true,
-      { retryAfter }
-    );
-  }
-}
-```
-
-### Error Handling in Python
+The MCP server uses the same error types regardless of transport:
 
 ```python
-# src/utils/errors.py
-from js import Response
-import json
+# src/server/errors.py
+from enum import Enum
+from typing import Any
 
-class ServiceError(Exception):
+class ErrorCode(int, Enum):
+    """MCP-compatible error codes."""
+    PARSE_ERROR = -32700
+    INVALID_REQUEST = -32600
+    METHOD_NOT_FOUND = -32601
+    INVALID_PARAMS = -32602
+    INTERNAL_ERROR = -32603
+
+    # Application-specific codes
+    AUTHENTICATION_ERROR = -32000
+    TASTYTRADE_ERROR = -32001
+    ANALYSIS_ERROR = -32002
+    RATE_LIMIT = -32003
+
+class McpError(Exception):
+    """MCP-compatible error."""
+
     def __init__(
         self,
+        code: ErrorCode,
         message: str,
-        code: str,
-        status_code: int = 500,
-        retryable: bool = False,
-        details: dict = None,
+        data: dict[str, Any] | None = None
     ):
-        super().__init__(message)
         self.code = code
-        self.status_code = status_code
-        self.retryable = retryable
-        self.details = details or {}
+        self.message = message
+        self.data = data or {}
 
-    def to_response(self):
-        return Response.new(
-            json.dumps({
-                "error": {
-                    "code": self.code,
-                    "message": str(self),
-                    "retryable": self.retryable,
-                    "details": self.details,
-                }
-            }),
-            status=self.status_code,
-            headers={"Content-Type": "application/json"}
-        )
-
-class ValidationError(ServiceError):
-    def __init__(self, message: str, details: dict = None):
-        super().__init__(message, "VALIDATION_ERROR", 400, False, details)
-
-class AuthenticationError(ServiceError):
-    def __init__(self, message: str = "Authentication required"):
-        super().__init__(message, "AUTHENTICATION_ERROR", 401, False)
-
-class NotFoundError(ServiceError):
-    def __init__(self, resource: str):
-        super().__init__(f"{resource} not found", "NOT_FOUND", 404, False)
+    def to_dict(self) -> dict:
+        return {
+            "code": self.code.value,
+            "message": self.message,
+            "data": self.data
+        }
 ```
 
-## Timeout and Retry Patterns
+### Error Flow
 
-### TypeScript Fetch with Timeout
-
-```typescript
-// src/utils/fetch.ts
-export async function fetchWithTimeout(
-  fetcher: Fetcher,
-  request: Request,
-  timeoutMs: number = 30000
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetcher.fetch(request, {
-      signal: controller.signal,
-    });
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
 ```
-
-### Retry with Exponential Backoff
-
-```typescript
-// src/utils/retry.ts
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: {
-    maxRetries?: number;
-    initialDelayMs?: number;
-    maxDelayMs?: number;
-    shouldRetry?: (error: Error) => boolean;
-  } = {}
-): Promise<T> {
-  const {
-    maxRetries = 3,
-    initialDelayMs = 1000,
-    maxDelayMs = 30000,
-    shouldRetry = () => true,
-  } = options;
-
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error as Error;
-
-      if (attempt === maxRetries || !shouldRetry(lastError)) {
-        throw lastError;
-      }
-
-      const delay = Math.min(
-        initialDelayMs * Math.pow(2, attempt),
-        maxDelayMs
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError;
-}
+Python Exception
+    ↓
+TTAIError (with code, message, retryable)
+    ↓
+MCP Tool returns error in JSON-RPC response
+    ↓
+                    ┌────────────────────┬────────────────────┐
+                    │                    │                    │
+            SIDECAR MODE           HEADLESS MODE
+                    │                    │
+                    ▼                    ▼
+        Rust McpClient          HTTP Response
+        extracts error          with error JSON
+                    │                    │
+                    ▼                    │
+        Tauri Command                    │
+        returns Err                      │
+                    │                    │
+                    ▼                    ▼
+        Frontend invoke()        Client handles
+        rejects Promise          error response
 ```
 
 ## Cross-References
 
-- [MCP Server Design](./01-mcp-server-design.md) - Service bindings
-- [Python Workers](./03-python-workers.md) - Python request handling
-- [Data Layer](./05-data-layer.md) - Queue patterns
-- [Background Tasks](./06-background-tasks.md) - Durable Object patterns
+- [MCP Server Design](./01-mcp-server-design.md) - Dual-mode architecture, transport selection
+- [Python Server](./03-python-server.md) - Entry point, SSE transport
+- [Background Tasks](./06-background-tasks.md) - Notifications via stderr/webhooks
+- [Build and Distribution](./08-build-distribution.md) - Sidecar bundling
+- [Local Development](./10-local-development.md) - Running both modes
+- [Frontend Architecture](./11-frontend.md) - Settings UI, Tailwind CSS, DaisyUI

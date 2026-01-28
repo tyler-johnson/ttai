@@ -2,859 +2,1112 @@
 
 ## Overview
 
-The AI agent system provides intelligent analysis of trading opportunities through a hierarchy of specialized agents running in Cloudflare Python Workers. Using LiteLLM for provider-agnostic LLM access (Anthropic, OpenAI, Google, Bedrock, Azure, etc.), agents analyze charts, options, and research data to generate trading recommendations.
+The AI agent system provides specialized analysts for different aspects of trading analysis. Each agent uses LiteLLM for provider-agnostic LLM integration, allowing users to choose their preferred AI provider (Anthropic, OpenAI, etc.). Agents run locally as part of the Python MCP server and can be orchestrated for comprehensive multi-step analysis.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Cloudflare Python Workers                        │
+│                       AI Agent System                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                  Orchestrator Agent                             │ │
-│  │              (Synthesis & Final Recommendation)                 │ │
-│  └──────────────────────────┬─────────────────────────────────────┘ │
-│                             │                                        │
-│         ┌───────────────────┼───────────────────┐                   │
-│         ▼                   ▼                   ▼                   │
-│  ┌────────────┐     ┌────────────┐     ┌────────────┐              │
-│  │   Chart    │     │  Options   │     │  Research  │              │
-│  │  Analyst   │     │  Analyst   │     │  Analyst   │              │
-│  └─────┬──────┘     └─────┬──────┘     └─────┬──────┘              │
-│        │                  │                  │                      │
-│        └──────────────────┼──────────────────┘                      │
-│                           ▼                                         │
+│  │                    Analysis Orchestrator                       │ │
+│  │        Coordinates multi-agent analysis workflows              │ │
+│  └───────────────────────────┬────────────────────────────────────┘ │
+│                              │                                       │
+│      ┌───────────────────────┼───────────────────────┐              │
+│      │                       │                       │              │
+│      ▼                       ▼                       ▼              │
+│  ┌─────────┐          ┌─────────┐          ┌─────────────┐          │
+│  │ Chart   │          │ Options │          │  Research   │          │
+│  │ Analyst │          │ Analyst │          │  Analyst    │          │
+│  └────┬────┘          └────┬────┘          └──────┬──────┘          │
+│       │                    │                      │                  │
+│       └────────────────────┼──────────────────────┘                  │
+│                            ▼                                         │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                       Tool Executor                             │ │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐              │ │
-│  │  │ Quotes  │ │ Options │ │  News   │ │Technical│              │ │
-│  │  │  Tool   │ │  Chain  │ │  Tool   │ │ Analysis│              │ │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘              │ │
+│  │                     Base Agent Class                           │ │
+│  │    LiteLLM Integration | Tool Execution | Memory               │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                            │                                         │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                 LiteLLM (Provider Agnostic)                    │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │ │
+│  │  │ Anthropic│  │  OpenAI  │  │  Google  │  │  Bedrock │       │ │
+│  │  │  Claude  │  │   GPT    │  │  Gemini  │  │  Claude  │       │ │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │ │
 │  └────────────────────────────────────────────────────────────────┘ │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │    LiteLLM      │
-                    │  (LLM Router)   │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         ▼                   ▼                   ▼
-   ┌───────────┐      ┌───────────┐      ┌───────────┐
-   │ Anthropic │      │  OpenAI   │      │  Google   │
-   │  Claude   │      │  GPT-4o   │      │  Gemini   │
-   └───────────┘      └───────────┘      └───────────┘
 ```
 
-## LiteLLM Integration
+## LiteLLM Configuration
 
-### Provider-Agnostic LLM Access
+### Environment Variables
 
-LiteLLM provides a unified interface for multiple LLM providers:
+LiteLLM reads API keys from environment variables. Users configure these in the app settings or system environment.
 
 ```python
-# src/agents/llm.py
+# src/agents/llm_config.py
+import os
+from dataclasses import dataclass
+from typing import Optional
 import litellm
-from typing import List, Dict, Any, Optional
 
-# Default model - can be overridden via environment
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
+@dataclass
+class LLMConfig:
+    """Configuration for LLM providers."""
 
-async def completion(
-    messages: List[Dict[str, str]],
-    model: Optional[str] = None,
-    tools: Optional[List[Dict]] = None,
-    temperature: float = 0.7,
-    max_tokens: int = 4096,
-) -> Dict[str, Any]:
-    """
-    Make an LLM completion request via LiteLLM.
+    # Default model (can be overridden per-agent)
+    default_model: str = "anthropic/claude-sonnet-4-20250514"
 
-    Args:
-        messages: Chat messages in OpenAI format
-        model: Model string (e.g., "anthropic/claude-sonnet-4-20250514")
-        tools: Tool definitions for function calling
-        temperature: Sampling temperature
-        max_tokens: Maximum tokens to generate
+    # Temperature for generation
+    temperature: float = 0.7
 
-    Returns:
-        LLM response with choices and usage
-    """
-    response = await litellm.acompletion(
-        model=model or DEFAULT_MODEL,
-        messages=messages,
-        tools=tools,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    # Max tokens for responses
+    max_tokens: int = 4096
 
-    return response
+    # Timeout in seconds
+    timeout: int = 120
+
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        """Create config from environment variables."""
+        return cls(
+            default_model=os.getenv(
+                "TTAI_DEFAULT_MODEL",
+                "anthropic/claude-sonnet-4-20250514"
+            ),
+            temperature=float(os.getenv("TTAI_LLM_TEMPERATURE", "0.7")),
+            max_tokens=int(os.getenv("TTAI_LLM_MAX_TOKENS", "4096")),
+            timeout=int(os.getenv("TTAI_LLM_TIMEOUT", "120")),
+        )
+
+def setup_litellm():
+    """Configure LiteLLM settings."""
+    # Enable verbose logging in debug mode
+    litellm.set_verbose = os.getenv("TTAI_DEBUG", "false").lower() == "true"
+
+    # Set callbacks for logging/monitoring if needed
+    # litellm.success_callback = [custom_callback]
+
+# Supported models for UI dropdown
+SUPPORTED_MODELS = [
+    # Anthropic
+    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-opus-4-20250514",
+    "anthropic/claude-3-5-haiku-20241022",
+
+    # OpenAI
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/o1-preview",
+
+    # Google
+    "gemini/gemini-1.5-pro",
+    "gemini/gemini-1.5-flash",
+
+    # AWS Bedrock
+    "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+]
 ```
 
-### Model String Format
-
-LiteLLM uses a `provider/model` format:
-
-```python
-# Anthropic models
-"anthropic/claude-sonnet-4-20250514"
-"anthropic/claude-opus-4-20250514"
-
-# OpenAI models
-"openai/gpt-4o"
-"openai/gpt-4-turbo"
-
-# Google models
-"gemini/gemini-1.5-pro"
-"gemini/gemini-2.0-flash"
-
-# AWS Bedrock
-"bedrock/anthropic.claude-3-sonnet"
-
-# Azure OpenAI
-"azure/gpt-4o"
-```
-
-### Environment Configuration
-
-LiteLLM reads API keys from standard environment variables:
-
-```bash
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-
-# OpenAI
-OPENAI_API_KEY=sk-...
-
-# Google
-GOOGLE_API_KEY=...
-
-# AWS Bedrock
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION_NAME=us-east-1
-
-# Azure OpenAI
-AZURE_API_KEY=...
-AZURE_API_BASE=https://your-resource.openai.azure.com/
-AZURE_API_VERSION=2024-02-15-preview
-```
-
-## Agent Implementation
-
-### Base Agent Class
+## Base Agent Class
 
 ```python
 # src/agents/base.py
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
 import json
+import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
+import litellm
+
+from .llm_config import LLMConfig
+
+logger = logging.getLogger(__name__)
 
 @dataclass
-class AgentConfig:
-    model: str = "anthropic/claude-sonnet-4-20250514"
-    temperature: float = 0.7
-    max_tokens: int = 4096
-    max_tool_calls: int = 10
+class Message:
+    """A conversation message."""
+    role: str  # "user", "assistant", "system", "tool"
+    content: str
+    tool_call_id: Optional[str] = None
+    tool_calls: Optional[List[Dict]] = None
+    name: Optional[str] = None
+
+@dataclass
+class Tool:
+    """A tool available to the agent."""
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+    handler: Callable[..., Any]
+
+@dataclass
+class AgentContext:
+    """Context passed to agent during execution."""
+    symbol: Optional[str] = None
+    timeframe: Optional[str] = None
+    strategy: Optional[str] = None
+    chart_context: Optional[Dict[str, Any]] = None
+    additional_data: Dict[str, Any] = field(default_factory=dict)
 
 class BaseAgent(ABC):
-    """Base class for all AI agents."""
+    """
+    Base class for AI agents with LiteLLM integration.
 
-    def __init__(self, env, config: Optional[AgentConfig] = None):
-        self.env = env
-        self.config = config or AgentConfig()
-        self.tool_calls_made = 0
+    Provides:
+    - LLM completion with tool use
+    - Conversation memory
+    - Tool execution loop
+    - Error handling
+    """
+
+    def __init__(
+        self,
+        name: str,
+        system_prompt: str,
+        config: Optional[LLMConfig] = None,
+        tools: Optional[List[Tool]] = None,
+    ):
+        self.name = name
+        self.system_prompt = system_prompt
+        self.config = config or LLMConfig.from_env()
+        self.tools = tools or []
+        self._messages: List[Message] = []
 
     @property
-    @abstractmethod
-    def system_prompt(self) -> str:
-        """Agent's system prompt."""
-        pass
-
-    @property
-    @abstractmethod
-    def tools(self) -> List[Dict]:
-        """Available tools for this agent."""
-        pass
-
-    async def run(self, user_message: str, context: Dict = None) -> Dict[str, Any]:
-        """Execute the agent's analysis loop."""
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": self._format_message(user_message, context)},
+    def messages(self) -> List[Dict[str, Any]]:
+        """Get messages in LiteLLM format."""
+        return [
+            {"role": "system", "content": self.system_prompt}
+        ] + [
+            self._message_to_dict(m) for m in self._messages
         ]
 
-        while self.tool_calls_made < self.config.max_tool_calls:
-            response = await completion(
-                messages=messages,
-                model=self.config.model,
-                tools=self.tools,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-            )
+    def _message_to_dict(self, msg: Message) -> Dict[str, Any]:
+        """Convert Message to dict for LiteLLM."""
+        d = {"role": msg.role, "content": msg.content}
+        if msg.tool_call_id:
+            d["tool_call_id"] = msg.tool_call_id
+        if msg.tool_calls:
+            d["tool_calls"] = msg.tool_calls
+        if msg.name:
+            d["name"] = msg.name
+        return d
 
+    def _tools_to_openai_format(self) -> List[Dict[str, Any]]:
+        """Convert tools to OpenAI function calling format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            }
+            for tool in self.tools
+        ]
+
+    async def complete(
+        self,
+        user_message: str,
+        max_iterations: int = 10
+    ) -> str:
+        """
+        Run completion with tool execution loop.
+
+        Args:
+            user_message: The user's input message
+            max_iterations: Maximum tool execution iterations
+
+        Returns:
+            Final assistant response text
+        """
+        # Add user message
+        self._messages.append(Message(role="user", content=user_message))
+
+        for iteration in range(max_iterations):
+            logger.debug(f"{self.name}: Iteration {iteration + 1}/{max_iterations}")
+
+            # Call LLM
+            response = await self._call_llm()
+
+            # Extract assistant message
             assistant_message = response.choices[0].message
 
-            # Check if agent wants to call tools
+            # Check for tool calls
             if assistant_message.tool_calls:
-                messages.append(assistant_message.model_dump())
+                # Add assistant message with tool calls
+                self._messages.append(Message(
+                    role="assistant",
+                    content=assistant_message.content or "",
+                    tool_calls=[
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in assistant_message.tool_calls
+                    ]
+                ))
 
                 # Execute each tool call
                 for tool_call in assistant_message.tool_calls:
                     result = await self._execute_tool(
                         tool_call.function.name,
-                        json.loads(tool_call.function.arguments),
+                        json.loads(tool_call.function.arguments)
                     )
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(result),
-                    })
-
-                    self.tool_calls_made += 1
+                    # Add tool result
+                    self._messages.append(Message(
+                        role="tool",
+                        content=json.dumps(result) if isinstance(result, dict) else str(result),
+                        tool_call_id=tool_call.id,
+                        name=tool_call.function.name
+                    ))
             else:
-                # Agent finished - parse final response
-                return self._parse_response(assistant_message.content)
+                # No tool calls, we have our final response
+                final_content = assistant_message.content or ""
+                self._messages.append(Message(
+                    role="assistant",
+                    content=final_content
+                ))
+                return final_content
 
-        return {"error": "Max tool calls exceeded", "tool_calls_made": self.tool_calls_made}
+        # Max iterations reached
+        logger.warning(f"{self.name}: Max iterations reached")
+        return self._messages[-1].content if self._messages else "Analysis incomplete"
 
-    async def _execute_tool(self, name: str, arguments: Dict) -> Any:
-        """Execute a tool and return the result."""
-        tool_fn = self._get_tool_function(name)
-        if tool_fn:
-            return await tool_fn(**arguments)
-        return {"error": f"Unknown tool: {name}"}
+    async def _call_llm(self) -> Any:
+        """Call the LLM via LiteLLM."""
+        try:
+            response = await litellm.acompletion(
+                model=self.config.default_model,
+                messages=self.messages,
+                tools=self._tools_to_openai_format() if self.tools else None,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                timeout=self.config.timeout,
+            )
+            return response
+
+        except litellm.RateLimitError as e:
+            logger.error(f"Rate limit error: {e}")
+            raise
+        except litellm.APIError as e:
+            logger.error(f"API error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            raise
+
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any]
+    ) -> Any:
+        """Execute a tool by name."""
+        logger.debug(f"{self.name}: Executing tool {tool_name}")
+
+        tool = next((t for t in self.tools if t.name == tool_name), None)
+        if not tool:
+            return {"error": f"Unknown tool: {tool_name}"}
+
+        try:
+            result = await tool.handler(**arguments)
+            return result
+        except Exception as e:
+            logger.error(f"Tool {tool_name} failed: {e}")
+            return {"error": str(e)}
+
+    def clear_memory(self) -> None:
+        """Clear conversation history."""
+        self._messages.clear()
 
     @abstractmethod
-    def _get_tool_function(self, name: str):
-        """Get the function for a tool by name."""
-        pass
-
-    def _format_message(self, message: str, context: Dict = None) -> str:
-        """Format user message with optional context."""
-        if context:
-            context_str = json.dumps(context, indent=2)
-            return f"{message}\n\nContext:\n{context_str}"
-        return message
-
-    @abstractmethod
-    def _parse_response(self, content: str) -> Dict[str, Any]:
-        """Parse agent's final response into structured output."""
+    async def analyze(self, *args, **kwargs) -> Dict[str, Any]:
+        """Run the agent's analysis. Implemented by subclasses."""
         pass
 ```
 
-### Chart Analyst Agent
+## Chart Analyst Agent
 
 ```python
 # src/agents/chart_analyst.py
-from agents.base import BaseAgent, AgentConfig
-from typing import List, Dict, Any
 import json
+from typing import Any, Dict, Optional
 
-CHART_ANALYST_PROMPT = """You are an expert technical analyst specializing in identifying
-optimal entry points for options trades. Your analysis focuses on:
+from .base import BaseAgent, Tool, AgentContext
+from ..services.tastytrade import TastyTradeService
+from ..services.cache import CacheService
+from ..analysis.indicators import calculate_indicators
+from ..analysis.levels import detect_support_resistance
 
-1. TREND ANALYSIS
-   - Identify primary trend direction and quality
-   - Look for higher highs/higher lows (uptrend) or lower highs/lower lows (downtrend)
-   - Assess trend strength and momentum
+CHART_ANALYST_PROMPT = """You are a technical chart analyst specializing in options trading setups.
+Your job is to analyze price charts and identify:
 
-2. SUPPORT/RESISTANCE
-   - Find key support levels for potential put strike placement
-   - Identify resistance levels that may cap upside
-   - Note confluence zones where multiple levels align
+1. **Trend Analysis**: Current trend direction and strength
+2. **Support/Resistance**: Key price levels
+3. **Technical Indicators**: RSI, MACD, moving averages
+4. **Chart Patterns**: Any significant patterns forming
+5. **Volatility Assessment**: Current volatility state
 
-3. FIBONACCI ANALYSIS
-   - Apply Fibonacci retracements from significant swings
-   - Identify retracement levels (38.2%, 50%, 61.8%)
-   - Look for Fibonacci confluence with other support
+Focus on setups suitable for selling options premium (CSPs, covered calls).
+Prefer stocks that are:
+- In established uptrends or bouncing off support
+- Not extended too far from moving averages
+- Showing signs of consolidation or pullback
 
-4. EXTENSION RISK
-   - Assess if price is extended from moving averages
-   - Check RSI for overbought/oversold conditions
-   - Evaluate risk of mean reversion
-
-Your output should be a JSON object with your analysis.
-"""
+Output your analysis as structured JSON with your recommendation."""
 
 class ChartAnalyst(BaseAgent):
-    """Agent specialized in technical chart analysis."""
+    """
+    Technical chart analysis agent.
 
-    @property
-    def system_prompt(self) -> str:
-        return CHART_ANALYST_PROMPT
+    Analyzes price action, indicators, and chart patterns
+    to identify trading setups.
+    """
 
-    @property
-    def tools(self) -> List[Dict]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_price_history",
-                    "description": "Get historical OHLCV price data for a symbol",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string", "description": "Stock ticker symbol"},
-                            "interval": {
-                                "type": "string",
-                                "enum": ["5m", "15m", "1h", "1d", "1wk"],
-                                "description": "Time interval for bars"
-                            },
-                            "period": {
-                                "type": "string",
-                                "enum": ["1d", "5d", "1mo", "3mo", "6mo", "1y"],
-                                "description": "Historical period"
-                            },
-                        },
-                        "required": ["symbol"],
+    def __init__(
+        self,
+        tastytrade: TastyTradeService,
+        cache: CacheService,
+        model: Optional[str] = None
+    ):
+        self.tastytrade = tastytrade
+        self.cache = cache
+
+        # Define tools available to this agent
+        tools = [
+            Tool(
+                name="get_quote",
+                description="Get current quote data for a symbol",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Stock symbol"
+                        }
                     },
+                    "required": ["symbol"]
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_indicators",
-                    "description": "Calculate technical indicators (SMA, EMA, RSI, Bollinger Bands)",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                            "indicators": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of indicators: sma_20, sma_50, sma_200, ema_9, rsi_14, bollinger"
-                            },
+                handler=self._get_quote
+            ),
+            Tool(
+                name="get_price_history",
+                description="Get historical price data for technical analysis",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Stock symbol"
                         },
-                        "required": ["symbol", "indicators"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "find_support_resistance",
-                    "description": "Find support and resistance levels",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                            "lookback_days": {"type": "integer", "default": 60},
+                        "timeframe": {
+                            "type": "string",
+                            "description": "Timeframe: daily, weekly",
+                            "enum": ["daily", "weekly"]
                         },
-                        "required": ["symbol"],
+                        "periods": {
+                            "type": "integer",
+                            "description": "Number of periods",
+                            "default": 100
+                        }
                     },
+                    "required": ["symbol"]
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_fibonacci",
-                    "description": "Calculate Fibonacci retracement levels from a price swing",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                            "swing_type": {
-                                "type": "string",
-                                "enum": ["recent", "major"],
-                                "description": "Type of swing to analyze"
-                            },
-                        },
-                        "required": ["symbol"],
+                handler=self._get_price_history
+            ),
+            Tool(
+                name="calculate_technicals",
+                description="Calculate technical indicators for a symbol",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Stock symbol"
+                        }
                     },
+                    "required": ["symbol"]
                 },
-            },
+                handler=self._calculate_technicals
+            ),
+            Tool(
+                name="find_levels",
+                description="Find support and resistance levels",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Stock symbol"
+                        }
+                    },
+                    "required": ["symbol"]
+                },
+                handler=self._find_levels
+            ),
         ]
 
-    def _get_tool_function(self, name: str):
-        tool_map = {
-            "get_price_history": self._get_price_history,
-            "calculate_indicators": self._calculate_indicators,
-            "find_support_resistance": self._find_support_resistance,
-            "calculate_fibonacci": self._calculate_fibonacci,
-        }
-        return tool_map.get(name)
+        super().__init__(
+            name="ChartAnalyst",
+            system_prompt=CHART_ANALYST_PROMPT,
+            tools=tools
+        )
 
-    async def _get_price_history(self, symbol: str, interval: str = "1d", period: str = "6mo"):
-        """Fetch price history from market data service."""
-        from handlers.market_data import fetch_market_data
-        return await fetch_market_data(self.env, symbol, interval, period)
+        if model:
+            self.config.default_model = model
 
-    async def _calculate_indicators(self, symbol: str, indicators: List[str]):
-        """Calculate technical indicators."""
-        from analysis.indicators import calculate_sma, calculate_ema, calculate_rsi, calculate_bollinger_bands
+    async def _get_quote(self, symbol: str) -> Dict[str, Any]:
+        """Get quote data."""
+        return await self.tastytrade.get_quote(symbol)
 
-        # Get price data
-        data = await self._get_price_history(symbol)
-        closes = [bar["close"] for bar in data["bars"]]
-
-        results = {}
-        for ind in indicators:
-            if ind.startswith("sma_"):
-                period = int(ind.split("_")[1])
-                results[ind] = calculate_sma(closes, period)[-1]
-            elif ind.startswith("ema_"):
-                period = int(ind.split("_")[1])
-                results[ind] = calculate_ema(closes, period)[-1]
-            elif ind.startswith("rsi_"):
-                period = int(ind.split("_")[1])
-                results[ind] = calculate_rsi(closes, period)[-1]
-            elif ind == "bollinger":
-                results[ind] = calculate_bollinger_bands(closes)
-
-        return results
-
-    async def _find_support_resistance(self, symbol: str, lookback_days: int = 60):
-        """Find support and resistance levels."""
-        from analysis.levels import find_support_resistance
-
-        data = await self._get_price_history(symbol, period=f"{lookback_days}d")
-        closes = [bar["close"] for bar in data["bars"]]
-
-        return find_support_resistance(closes)
-
-    async def _calculate_fibonacci(self, symbol: str, swing_type: str = "recent"):
-        """Calculate Fibonacci levels."""
-        from analysis.indicators import calculate_fibonacci_levels
-
-        data = await self._get_price_history(symbol, period="3mo")
-        highs = [bar["high"] for bar in data["bars"]]
-        lows = [bar["low"] for bar in data["bars"]]
-
-        if swing_type == "recent":
-            # Use recent 20-day swing
-            recent_high = max(highs[-20:])
-            recent_low = min(lows[-20:])
-        else:
-            # Use full period swing
-            recent_high = max(highs)
-            recent_low = min(lows)
-
-        return calculate_fibonacci_levels(recent_high, recent_low)
-
-    def _parse_response(self, content: str) -> Dict[str, Any]:
-        """Parse chart analyst's response."""
-        try:
-            # Try to extract JSON from response
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0]
-                return json.loads(json_str)
-            elif "{" in content:
-                start = content.index("{")
-                end = content.rindex("}") + 1
-                return json.loads(content[start:end])
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Fallback: return raw content
+    async def _get_price_history(
+        self,
+        symbol: str,
+        timeframe: str = "daily",
+        periods: int = 100
+    ) -> Dict[str, Any]:
+        """Get historical price data."""
+        # This would fetch from TastyTrade or another data source
         return {
-            "recommendation": "neutral",
-            "chartNotes": content,
-            "tool_calls_made": self.tool_calls_made,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "periods": periods,
+            "data": "Price history would be fetched here"
         }
+
+    async def _calculate_technicals(self, symbol: str) -> Dict[str, Any]:
+        """Calculate technical indicators."""
+        quote = await self.tastytrade.get_quote(symbol)
+        return calculate_indicators(symbol, quote)
+
+    async def _find_levels(self, symbol: str) -> Dict[str, Any]:
+        """Find support/resistance levels."""
+        quote = await self.tastytrade.get_quote(symbol)
+        return detect_support_resistance(symbol, quote["last"])
+
+    async def analyze(
+        self,
+        symbol: str,
+        timeframe: str = "daily"
+    ) -> Dict[str, Any]:
+        """
+        Run chart analysis for a symbol.
+
+        Args:
+            symbol: Stock symbol to analyze
+            timeframe: Analysis timeframe (daily, weekly)
+
+        Returns:
+            Analysis results with recommendation
+        """
+        self.clear_memory()
+
+        prompt = f"""Analyze {symbol} on the {timeframe} timeframe.
+
+Use the available tools to gather data, then provide your analysis.
+
+Your response should be valid JSON with this structure:
+{{
+    "symbol": "{symbol}",
+    "timeframe": "{timeframe}",
+    "trend": "bullish" | "neutral" | "bearish",
+    "trend_strength": 1-10,
+    "support_levels": [price1, price2, ...],
+    "resistance_levels": [price1, price2, ...],
+    "indicators": {{
+        "rsi": value,
+        "macd_signal": "bullish" | "neutral" | "bearish",
+        "above_200ma": true | false
+    }},
+    "patterns": ["pattern1", ...],
+    "recommendation": "bullish" | "neutral" | "bearish",
+    "score": 1-10,
+    "reasoning": "Your analysis explanation"
+}}"""
+
+        response = await self.complete(prompt)
+
+        # Parse JSON response
+        try:
+            if "```json" in response:
+                json_str = response.split("```json")[1].split("```")[0]
+            elif "```" in response:
+                json_str = response.split("```")[1].split("```")[0]
+            else:
+                json_str = response
+
+            return json.loads(json_str.strip())
+
+        except json.JSONDecodeError:
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "recommendation": "neutral",
+                "score": 5,
+                "reasoning": response,
+                "raw_response": True
+            }
 ```
 
-### Options Analyst Agent
+## Options Analyst Agent
 
 ```python
 # src/agents/options_analyst.py
-from agents.base import BaseAgent, AgentConfig
-from typing import List, Dict, Any
 import json
+from typing import Any, Dict, Optional
 
-OPTIONS_ANALYST_PROMPT = """You are an expert options analyst specializing in premium selling
-strategies, particularly cash-secured puts. Your analysis focuses on:
+from .base import BaseAgent, Tool
+from ..services.tastytrade import TastyTradeService
+from ..services.cache import CacheService
 
-1. STRIKE SELECTION
-   - Choose strikes below key support levels
-   - Balance premium income vs. assignment risk
-   - Consider delta (typically 0.20-0.30 for CSPs)
+OPTIONS_ANALYST_PROMPT = """You are an options analyst specializing in premium-selling strategies.
+Given chart analysis context, your job is to:
 
-2. EXPIRATION SELECTION
-   - Target 30-45 DTE for optimal theta decay
-   - Avoid earnings dates
-   - Consider weekly vs monthly expirations
+1. **Evaluate Option Chain**: Find optimal strikes and expirations
+2. **Assess IV Rank**: Determine if premium is attractive
+3. **Calculate Risk/Reward**: Analyze potential outcomes
+4. **Select Strike**: Choose appropriate strike based on probability and premium
+5. **Recommend Position**: Specific option contract recommendation
 
-3. PREMIUM ANALYSIS
-   - Calculate return on capital (ROC)
-   - Compare to typical benchmarks (0.5%+ weekly)
-   - Factor in commission costs
+For Cash-Secured Puts (CSP):
+- Target 30-45 DTE
+- Look for 0.20-0.30 delta puts
+- Ensure strike is at or below support
+- Premium should be > 1% of strike
 
-4. RISK ASSESSMENT
-   - IV/HV ratio (prefer elevated IV)
-   - Liquidity (bid-ask spread, open interest)
-   - Greeks analysis (delta, gamma exposure)
+For Covered Calls:
+- Target 30-45 DTE
+- Look for 0.20-0.30 delta calls
+- Ensure strike is at or above resistance
+- Consider assignment risk
 
-Use the chart context provided to inform strike selection relative to support levels.
-"""
+Output structured JSON with your recommendation."""
 
 class OptionsAnalyst(BaseAgent):
-    """Agent specialized in options analysis."""
+    """
+    Options analysis agent.
 
-    @property
-    def system_prompt(self) -> str:
-        return OPTIONS_ANALYST_PROMPT
+    Analyzes option chains to find optimal premium-selling opportunities.
+    """
 
-    @property
-    def tools(self) -> List[Dict]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_option_chain",
-                    "description": "Get options chain for a symbol",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                            "expiration": {"type": "string", "description": "YYYY-MM-DD or 'all'"},
+    def __init__(
+        self,
+        tastytrade: TastyTradeService,
+        cache: CacheService,
+        model: Optional[str] = None
+    ):
+        self.tastytrade = tastytrade
+        self.cache = cache
+
+        tools = [
+            Tool(
+                name="get_option_chain",
+                description="Get option chain for a symbol",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Underlying symbol"
                         },
-                        "required": ["symbol"],
+                        "expiration": {
+                            "type": "string",
+                            "description": "Specific expiration (YYYY-MM-DD) or null for all"
+                        }
                     },
+                    "required": ["symbol"]
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_quote",
-                    "description": "Get current quote for underlying",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
+                handler=self._get_option_chain
+            ),
+            Tool(
+                name="get_quote",
+                description="Get current quote for the underlying",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Stock symbol"
+                        }
+                    },
+                    "required": ["symbol"]
+                },
+                handler=self._get_quote
+            ),
+            Tool(
+                name="calculate_roi",
+                description="Calculate return on investment for an option trade",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "premium": {
+                            "type": "number",
+                            "description": "Option premium collected"
                         },
-                        "required": ["symbol"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_iv_hv",
-                    "description": "Compare implied volatility to historical volatility",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
+                        "strike": {
+                            "type": "number",
+                            "description": "Strike price"
                         },
-                        "required": ["symbol"],
+                        "dte": {
+                            "type": "integer",
+                            "description": "Days to expiration"
+                        }
                     },
+                    "required": ["premium", "strike", "dte"]
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_roc",
-                    "description": "Calculate return on capital for a put option",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "strike": {"type": "number"},
-                            "premium": {"type": "number"},
-                            "dte": {"type": "integer"},
-                        },
-                        "required": ["strike", "premium", "dte"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_earnings_date",
-                    "description": "Get next earnings date for a symbol",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                        },
-                        "required": ["symbol"],
-                    },
-                },
-            },
+                handler=self._calculate_roi
+            ),
         ]
 
-    def _get_tool_function(self, name: str):
-        tool_map = {
-            "get_option_chain": self._get_option_chain,
-            "get_quote": self._get_quote,
-            "calculate_iv_hv": self._calculate_iv_hv,
-            "calculate_roc": self._calculate_roc,
-            "get_earnings_date": self._get_earnings_date,
-        }
-        return tool_map.get(name)
+        super().__init__(
+            name="OptionsAnalyst",
+            system_prompt=OPTIONS_ANALYST_PROMPT,
+            tools=tools
+        )
 
-    async def _get_option_chain(self, symbol: str, expiration: str = None):
-        """Fetch option chain."""
-        from tastytrade.client import TastyTradeClient
+        if model:
+            self.config.default_model = model
 
-        client = await TastyTradeClient.from_user_id(self.env, self.user_id)
-        return await client.get_option_chain(symbol, expiration)
+    async def _get_option_chain(
+        self,
+        symbol: str,
+        expiration: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get option chain."""
+        return await self.tastytrade.get_option_chain(symbol, expiration)
 
-    async def _get_quote(self, symbol: str):
-        """Fetch current quote."""
-        from tastytrade.client import TastyTradeClient
+    async def _get_quote(self, symbol: str) -> Dict[str, Any]:
+        """Get quote data."""
+        return await self.tastytrade.get_quote(symbol)
 
-        client = await TastyTradeClient.from_user_id(self.env, self.user_id)
-        quotes = await client.get_quotes([symbol])
-        return quotes.get(symbol)
-
-    async def _calculate_iv_hv(self, symbol: str):
-        """Calculate IV/HV ratio."""
-        from analysis.indicators import calculate_historical_volatility
-
-        # Get HV from price history
-        data = await self._get_price_history(symbol)
-        closes = [bar["close"] for bar in data["bars"]]
-        hv = calculate_historical_volatility(closes)
-
-        # Get IV from options chain (ATM option)
-        chain = await self._get_option_chain(symbol)
-        iv = chain.get("atm_iv", 0.30)  # Default if not available
+    async def _calculate_roi(
+        self,
+        premium: float,
+        strike: float,
+        dte: int
+    ) -> Dict[str, Any]:
+        """Calculate ROI metrics."""
+        trade_return = premium / strike
+        annual_return = trade_return * (365 / dte) if dte > 0 else 0
 
         return {
-            "iv": iv,
-            "hv": hv,
-            "iv_hv_ratio": iv / hv if hv > 0 else 0,
+            "trade_return": round(trade_return * 100, 2),
+            "annualized_return": round(annual_return * 100, 2),
+            "breakeven": round(strike - premium, 2),
+            "max_profit": round(premium * 100, 2),
+            "max_loss": round((strike - premium) * 100, 2),
         }
 
-    async def _calculate_roc(self, strike: float, premium: float, dte: int):
-        """Calculate return on capital."""
-        capital_required = strike * 100
-        total_return = premium * 100
+    async def analyze(
+        self,
+        symbol: str,
+        strategy: str = "csp",
+        chart_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze options opportunities for a symbol.
 
-        roc_total = total_return / capital_required * 100
-        roc_weekly = roc_total / (dte / 7)
-        roc_annualized = roc_weekly * 52
+        Args:
+            symbol: Underlying symbol
+            strategy: Strategy type (csp, covered_call, spread)
+            chart_context: Chart analysis context for informed decisions
 
-        return {
-            "roc_total": round(roc_total, 2),
-            "roc_weekly": round(roc_weekly, 2),
-            "roc_annualized": round(roc_annualized, 2),
+        Returns:
+            Options analysis with specific recommendation
+        """
+        self.clear_memory()
+
+        context_str = ""
+        if chart_context:
+            context_str = f"""
+Chart Analysis Context:
+- Trend: {chart_context.get('trend', 'unknown')}
+- Support Levels: {chart_context.get('support_levels', [])}
+- Resistance Levels: {chart_context.get('resistance_levels', [])}
+- Recommendation: {chart_context.get('recommendation', 'neutral')}
+"""
+
+        strategy_guidance = {
+            "csp": "Focus on cash-secured put opportunities. Look for puts at or below support with good premium.",
+            "covered_call": "Focus on covered call opportunities. Look for calls at or above resistance.",
+            "spread": "Focus on vertical spread opportunities. Consider both risk and premium."
         }
 
-    async def _get_earnings_date(self, symbol: str):
-        """Get next earnings date."""
-        # Query earnings calendar
-        # This would typically call an external API
-        return {"next_earnings": None, "days_to_earnings": None}
+        prompt = f"""Analyze {symbol} for {strategy} opportunities.
+{context_str}
+{strategy_guidance.get(strategy, '')}
 
-    def _parse_response(self, content: str) -> Dict[str, Any]:
-        """Parse options analyst's response."""
+Use the tools to analyze the option chain, then provide your recommendation.
+
+Your response should be valid JSON with this structure:
+{{
+    "symbol": "{symbol}",
+    "strategy": "{strategy}",
+    "recommendation": "select" | "watchlist" | "pass",
+    "selected_option": {{
+        "type": "put" | "call",
+        "strike": strike_price,
+        "expiration": "YYYY-MM-DD",
+        "dte": days,
+        "premium": premium_per_share,
+        "delta": delta_value,
+        "iv": implied_volatility
+    }},
+    "metrics": {{
+        "trade_return": percentage,
+        "annualized_return": percentage,
+        "breakeven": price,
+        "max_profit": dollars,
+        "max_loss": dollars,
+        "probability_of_profit": percentage
+    }},
+    "reasoning": "Your analysis explanation"
+}}"""
+
+        response = await self.complete(prompt)
+
         try:
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0]
-                return json.loads(json_str)
-            elif "{" in content:
-                start = content.index("{")
-                end = content.rindex("}") + 1
-                return json.loads(content[start:end])
-        except (json.JSONDecodeError, ValueError):
-            pass
+            if "```json" in response:
+                json_str = response.split("```json")[1].split("```")[0]
+            elif "```" in response:
+                json_str = response.split("```")[1].split("```")[0]
+            else:
+                json_str = response
 
-        return {
-            "recommendation": "reject",
-            "optionsNotes": content,
-            "tool_calls_made": self.tool_calls_made,
-        }
+            return json.loads(json_str.strip())
+
+        except json.JSONDecodeError:
+            return {
+                "symbol": symbol,
+                "strategy": strategy,
+                "recommendation": "watchlist",
+                "reasoning": response,
+                "raw_response": True
+            }
 ```
 
-## Tool Executor
-
-### Tool Definitions
+## Analysis Orchestrator
 
 ```python
-# src/agents/tools.py
-from typing import Dict, Any, Callable, List
+# src/agents/orchestrator.py
+import logging
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from .chart_analyst import ChartAnalyst
+from .options_analyst import OptionsAnalyst
+from ..services.tastytrade import TastyTradeService
+from ..services.cache import CacheService
+from ..services.database import DatabaseService
+from ..server.notifications import NotificationEmitter
+
+logger = logging.getLogger(__name__)
 
 @dataclass
-class ToolDefinition:
-    name: str
-    description: str
-    parameters: Dict[str, Any]
-    function: Callable
+class FullAnalysisResult:
+    """Complete analysis result."""
+    symbol: str
+    chart_analysis: Dict[str, Any]
+    options_analysis: Optional[Dict[str, Any]]
+    recommendation: str
+    score: float
+    timestamp: datetime
 
-class ToolExecutor:
-    """Central registry and executor for agent tools."""
+class AnalysisOrchestrator:
+    """
+    Orchestrates multi-agent analysis workflows.
 
-    def __init__(self, env, user_id: str):
-        self.env = env
-        self.user_id = user_id
-        self._tools: Dict[str, ToolDefinition] = {}
-        self._register_default_tools()
+    Coordinates chart and options analysts for comprehensive analysis.
+    """
 
-    def _register_default_tools(self):
-        """Register default tools available to all agents."""
-
-        # Quote tools
-        self.register(
-            "get_quote",
-            "Get real-time quote for a symbol",
-            {"symbol": {"type": "string"}},
-            self._get_quote,
-        )
-
-        self.register(
-            "get_quotes_batch",
-            "Get quotes for multiple symbols",
-            {"symbols": {"type": "array", "items": {"type": "string"}}},
-            self._get_quotes_batch,
-        )
-
-        # Options tools
-        self.register(
-            "get_option_chain",
-            "Get options chain for a symbol",
-            {
-                "symbol": {"type": "string"},
-                "expiration": {"type": "string", "optional": True},
-            },
-            self._get_option_chain,
-        )
-
-    def register(
+    def __init__(
         self,
-        name: str,
-        description: str,
-        parameters: Dict[str, Any],
-        function: Callable,
+        tastytrade: TastyTradeService,
+        cache: CacheService,
+        db: DatabaseService
     ):
-        """Register a new tool."""
-        self._tools[name] = ToolDefinition(
-            name=name,
-            description=description,
-            parameters=parameters,
-            function=function,
+        self.tastytrade = tastytrade
+        self.cache = cache
+        self.db = db
+
+        # Initialize agents
+        self.chart_analyst = ChartAnalyst(tastytrade, cache)
+        self.options_analyst = OptionsAnalyst(tastytrade, cache)
+
+    async def run_full_analysis(
+        self,
+        symbol: str,
+        strategy: str = "csp",
+        notify: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Run comprehensive multi-agent analysis.
+
+        Steps:
+        1. Chart analysis (technical)
+        2. Options analysis (if chart favorable)
+        3. Synthesize final recommendation
+        4. Save results
+        5. Notify user (optional)
+        """
+        logger.info(f"Starting full analysis for {symbol}")
+
+        # Step 1: Chart Analysis
+        chart_result = await self.chart_analyst.analyze(symbol)
+
+        # Early exit if chart analysis is bearish
+        if chart_result.get("recommendation") == "bearish":
+            result = {
+                "symbol": symbol,
+                "chart_analysis": chart_result,
+                "options_analysis": None,
+                "recommendation": "reject",
+                "score": chart_result.get("score", 3),
+                "reasoning": "Chart analysis indicates bearish conditions",
+                "timestamp": datetime.now().isoformat()
+            }
+
+            await self._save_analysis(symbol, "full", result)
+
+            if notify:
+                NotificationEmitter.analysis_complete(symbol, "reject")
+
+            return result
+
+        # Step 2: Options Analysis
+        options_result = await self.options_analyst.analyze(
+            symbol,
+            strategy=strategy,
+            chart_context=chart_result
         )
 
-    async def execute(self, name: str, arguments: Dict[str, Any]) -> Any:
-        """Execute a tool by name."""
-        if name not in self._tools:
-            return {"error": f"Unknown tool: {name}"}
+        # Step 3: Synthesize Recommendation
+        recommendation, score = self._synthesize_recommendation(
+            chart_result,
+            options_result
+        )
 
-        tool = self._tools[name]
-        return await tool.function(**arguments)
+        result = {
+            "symbol": symbol,
+            "strategy": strategy,
+            "chart_analysis": chart_result,
+            "options_analysis": options_result,
+            "recommendation": recommendation,
+            "score": score,
+            "reasoning": self._generate_reasoning(chart_result, options_result),
+            "timestamp": datetime.now().isoformat()
+        }
 
-    def get_tool_schemas(self, tool_names: List[str] = None) -> List[Dict]:
-        """Get OpenAI-format tool schemas."""
-        tools = tool_names or list(self._tools.keys())
+        # Step 4: Save Results
+        await self._save_analysis(symbol, "full", result)
 
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": t.parameters,
-                        "required": [k for k, v in t.parameters.items() if not v.get("optional")],
-                    },
-                },
-            }
-            for t in self._tools.values()
-            if t.name in tools
-        ]
+        # Step 5: Notify
+        if notify:
+            NotificationEmitter.analysis_complete(symbol, recommendation)
 
-    # Tool implementations
-    async def _get_quote(self, symbol: str) -> Dict:
-        from tastytrade.client import TastyTradeClient
+        logger.info(f"Completed analysis for {symbol}: {recommendation}")
+        return result
 
-        client = await TastyTradeClient.from_user_id(self.env, self.user_id)
-        if not client:
-            return {"error": "TastyTrade not connected"}
+    def _synthesize_recommendation(
+        self,
+        chart: Dict[str, Any],
+        options: Optional[Dict[str, Any]]
+    ) -> tuple[str, float]:
+        """Synthesize final recommendation from agent outputs."""
+        score = 0.0
 
-        quotes = await client.get_quotes([symbol])
-        return quotes.get(symbol, {"error": "Quote not found"})
+        chart_rec = chart.get("recommendation", "neutral")
+        chart_score = chart.get("score", 5)
 
-    async def _get_quotes_batch(self, symbols: List[str]) -> Dict:
-        from tastytrade.client import TastyTradeClient
+        if chart_rec == "bullish":
+            score += min(chart_score / 2, 2.5)
+        elif chart_rec == "neutral":
+            score += 1.0
 
-        client = await TastyTradeClient.from_user_id(self.env, self.user_id)
-        if not client:
-            return {"error": "TastyTrade not connected"}
+        if options:
+            options_rec = options.get("recommendation", "pass")
+            if options_rec == "select":
+                score += 2.5
 
-        return await client.get_quotes(symbols)
+                metrics = options.get("metrics", {})
+                if metrics.get("annualized_return", 0) > 20:
+                    score += 0.5
+                if metrics.get("probability_of_profit", 0) > 70:
+                    score += 0.5
 
-    async def _get_option_chain(self, symbol: str, expiration: str = None) -> Dict:
-        from tastytrade.client import TastyTradeClient
+            elif options_rec == "watchlist":
+                score += 1.0
 
-        client = await TastyTradeClient.from_user_id(self.env, self.user_id)
-        if not client:
-            return {"error": "TastyTrade not connected"}
+        if score >= 4.0:
+            return "strong_select", score
+        elif score >= 2.5:
+            return "select", score
+        elif score >= 1.0:
+            return "watchlist", score
+        else:
+            return "reject", score
 
-        return await client.get_option_chain(symbol, expiration)
+    def _generate_reasoning(
+        self,
+        chart: Dict[str, Any],
+        options: Optional[Dict[str, Any]]
+    ) -> str:
+        """Generate combined reasoning from analyses."""
+        parts = []
+
+        if chart.get("reasoning"):
+            parts.append(f"Chart: {chart['reasoning']}")
+
+        if options and options.get("reasoning"):
+            parts.append(f"Options: {options['reasoning']}")
+
+        return " | ".join(parts) if parts else "Analysis complete"
+
+    async def _save_analysis(
+        self,
+        symbol: str,
+        analysis_type: str,
+        result: Dict[str, Any]
+    ) -> None:
+        """Save analysis to database."""
+        await self.db.save_analysis(
+            symbol=symbol,
+            analysis_type=analysis_type,
+            result=result
+        )
+
+    async def run_screener(
+        self,
+        symbols: List[str],
+        strategy: str = "csp",
+        max_concurrent: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Screen multiple symbols concurrently.
+
+        Args:
+            symbols: List of symbols to screen
+            strategy: Options strategy
+            max_concurrent: Max concurrent analyses
+
+        Returns:
+            Ranked list of analysis results
+        """
+        import asyncio
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def analyze_with_limit(symbol: str) -> Optional[Dict[str, Any]]:
+            async with semaphore:
+                try:
+                    return await self.run_full_analysis(
+                        symbol,
+                        strategy=strategy,
+                        notify=False
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to analyze {symbol}: {e}")
+                    return None
+
+        tasks = [analyze_with_limit(s) for s in symbols]
+        all_results = await asyncio.gather(*tasks)
+
+        valid_results = [r for r in all_results if r is not None]
+        ranked = sorted(
+            valid_results,
+            key=lambda x: x.get("score", 0),
+            reverse=True
+        )
+
+        return ranked[:10]
 ```
 
-## Worker-to-Worker Communication
-
-### Analysis Request Handler
+## Technical Indicators Utilities
 
 ```python
-# src/handlers/analysis.py
-from js import Response
-import json
+# src/analysis/indicators.py
+from typing import Any, Dict
 
-async def handle_analysis(request, env, user_id: str, analysis_type: str):
-    """Handle analysis requests from TypeScript worker."""
-    body = json.loads(await request.text())
-    symbol = body.get("symbol")
+def calculate_indicators(symbol: str, quote: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate technical indicators from quote data.
 
-    if not symbol:
-        return Response.new(
-            json.dumps({"error": "No symbol provided"}),
-            status=400,
-            headers={"Content-Type": "application/json"}
-        )
+    In a real implementation, this would use historical data
+    and proper indicator calculations (e.g., pandas-ta).
+    """
+    current_price = quote.get("last", 0)
 
-    # Run appropriate agent
-    if analysis_type == "chart":
-        from agents.chart_analyst import ChartAnalyst
+    return {
+        "symbol": symbol,
+        "current_price": current_price,
+        "indicators": {
+            "rsi_14": 55.0,
+            "macd": {
+                "value": 0.5,
+                "signal": 0.3,
+                "histogram": 0.2,
+                "trend": "bullish"
+            },
+            "moving_averages": {
+                "sma_20": current_price * 0.98,
+                "sma_50": current_price * 0.95,
+                "sma_200": current_price * 0.90,
+                "above_20": True,
+                "above_50": True,
+                "above_200": True
+            },
+            "bollinger_bands": {
+                "upper": current_price * 1.05,
+                "middle": current_price,
+                "lower": current_price * 0.95,
+                "position": "middle"
+            }
+        }
+    }
 
-        agent = ChartAnalyst(env)
-        agent.user_id = user_id
-        result = await agent.run(f"Analyze the chart for {symbol}", body)
 
-    elif analysis_type == "options":
-        from agents.options_analyst import OptionsAnalyst
+# src/analysis/levels.py
+def detect_support_resistance(symbol: str, current_price: float) -> Dict[str, Any]:
+    """
+    Detect support and resistance levels.
 
-        agent = OptionsAnalyst(env)
-        agent.user_id = user_id
-        context = body.get("chartContext", {})
-        strategy = body.get("strategy", "csp")
-        result = await agent.run(
-            f"Analyze options for {symbol} using {strategy} strategy",
-            {"chartContext": context, "strategy": strategy},
-        )
-
-    elif analysis_type == "research":
-        from agents.research_analyst import ResearchAnalyst
-
-        agent = ResearchAnalyst(env)
-        agent.user_id = user_id
-        result = await agent.run(f"Research {symbol}", body)
-
-    else:
-        return Response.new(
-            json.dumps({"error": f"Unknown analysis type: {analysis_type}"}),
-            status=400,
-            headers={"Content-Type": "application/json"}
-        )
-
-    return Response.new(
-        json.dumps(result),
-        headers={"Content-Type": "application/json"}
-    )
+    Real implementation would analyze historical price action.
+    """
+    return {
+        "symbol": symbol,
+        "current_price": current_price,
+        "support_levels": [
+            round(current_price * 0.95, 2),
+            round(current_price * 0.90, 2),
+            round(current_price * 0.85, 2),
+        ],
+        "resistance_levels": [
+            round(current_price * 1.05, 2),
+            round(current_price * 1.10, 2),
+            round(current_price * 1.15, 2),
+        ],
+        "key_level": round(current_price * 0.95, 2),
+        "level_type": "support"
+    }
 ```
 
 ## Cross-References
 
 - [MCP Server Design](./01-mcp-server-design.md) - Tool registration
-- [Python Workers](./03-python-workers.md) - Python runtime environment
-- [Workflow Orchestration](./02-workflow-orchestration.md) - Analysis pipelines
-- [Integration Patterns](./09-integration-patterns.md) - Worker communication
+- [Python Server](./03-python-server.md) - Project structure
+- [Workflow Orchestration](./02-workflow-orchestration.md) - Task integration
+- [Knowledge Base](./07-knowledge-base.md) - RAG for research agent

@@ -2,925 +2,957 @@
 
 ## Overview
 
-The MCP (Model Context Protocol) server is implemented as a TypeScript Cloudflare Worker that serves as the primary API layer for the TTAI system. It handles client connections via Streamable HTTP with SSE fallback, authenticates users via TastyTrade OAuth, and orchestrates requests across the Cloudflare platform.
+The MCP (Model Context Protocol) server is a Python application that provides tools, resources, and prompts for AI-assisted trading analysis, handles TastyTrade authentication with locally-encrypted credentials, and orchestrates all backend functionality for the TTAI system.
+
+The server supports two deployment modes with the same codebase:
+- **Sidecar Mode**: Bundled with the Tauri desktop app, communicating via stdio
+- **Headless Mode**: Run directly from source as a standalone server, communicating via HTTP/SSE
+
+Both modes share the same configuration, support both transport protocols, and provide identical functionality.
 
 ## Architecture
 
+### Deployment Modes
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Python MCP Server                                    │
+│                    (One Codebase, Two Deployment Modes)                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────────────────┐    ┌────────────────────────────────┐   │
+│  │      SIDECAR MODE              │    │      HEADLESS MODE             │   │
+│  │  (Bundled with Tauri App)      │    │  (Run from Source)             │   │
+│  ├────────────────────────────────┤    ├────────────────────────────────┤   │
+│  │                                │    │                                │   │
+│  │  ┌──────────────────────────┐  │    │  ┌──────────────────────────┐  │   │
+│  │  │    Tauri Desktop App     │  │    │  │   External MCP Client    │  │   │
+│  │  │  (Svelte + Rust Shell)   │  │    │  │  (Claude Desktop, etc.)  │  │   │
+│  │  └───────────┬──────────────┘  │    │  └───────────┬──────────────┘  │   │
+│  │              │ stdio           │    │              │ HTTP/SSE        │   │
+│  │              ▼                 │    │              ▼                 │   │
+│  │  ┌──────────────────────────┐  │    │  ┌──────────────────────────┐  │   │
+│  │  │   Python MCP Server      │  │    │  │   Python MCP Server      │  │   │
+│  │  │   (PyInstaller binary)   │  │    │  │   (python -m src.server) │  │   │
+│  │  └──────────────────────────┘  │    │  └──────────────────────────┘  │   │
+│  │                                │    │                                │   │
+│  │  Notifications: stderr→Tauri   │    │  Notifications: Webhooks       │   │
+│  └────────────────────────────────┘    └────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Server Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Cloudflare Edge Network                          │
+│                    Python MCP Server                                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │              MCP Server (TypeScript Worker)                     │ │
-│  │         Streamable HTTP + SSE | TastyTrade OAuth                │ │
-│  └──────────────────────────┬─────────────────────────────────────┘ │
-│                             │                                        │
-│      ┌──────────────────────┼──────────────────────┐                │
-│      ▼                      ▼                      ▼                │
-│  ┌────────────┐    ┌────────────────┐    ┌────────────────┐        │
-│  │  Durable   │    │   Cloudflare   │    │ Python Workers │        │
-│  │  Objects   │    │   Workflows    │    │ (TastyTrade,   │        │
-│  │ (Sessions, │    │   (Durable     │    │  AI Agents,    │        │
-│  │  WebSocket)│    │   Execution)   │    │  Analysis)     │        │
-│  └─────┬──────┘    └───────┬────────┘    └───────┬────────┘        │
-│        │                   │                     │                  │
-│        └───────────────────┼─────────────────────┘                  │
-│                            ▼                                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-│  │    KV    │  │    D1    │  │  Queues  │  │    R2    │           │
-│  │ (Cache)  │  │ (SQLite) │  │ (Async)  │  │(Storage) │           │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘           │
+│  │                     Transport Layer                             │ │
+│  │  ┌──────────────────────┐    ┌──────────────────────┐          │ │
+│  │  │   stdio Transport    │    │   HTTP/SSE Transport │          │ │
+│  │  │  (Sidecar + CLI)     │    │  (Network Access)    │          │ │
+│  │  └──────────────────────┘    └──────────────────────┘          │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                              │                                       │
+│  ┌───────────────────────────┴───────────────────────────────────┐  │
+│  │                     MCP Protocol Layer                         │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │  │
+│  │  │  Tools   │  │ Resources│  │ Prompts  │  │ Handlers │       │  │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                              │                                       │
+│  ┌───────────────────────────┴───────────────────────────────────┐  │
+│  │                      Services Layer                            │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │  │
+│  │  │TastyTrade│  │ Database │  │  Cache   │  │Knowledge │       │  │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                              │                                       │
+│  ┌───────────────────────────┴───────────────────────────────────┐  │
+│  │                       Data Layer                               │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐                   │  │
+│  │  │  SQLite Database │  │ Encrypted Creds  │                   │  │
+│  │  └──────────────────┘  └──────────────────┘                   │  │
+│  └───────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
-                              │
-                             │
-              ┌──────────────┴──────────────┐
-              ▼                             ▼
-       ┌───────────┐                 ┌───────────┐
-       │TastyTrade │                 │ LLM APIs  │
-       │   API     │                 │(via LiteLLM)│
-       │  + OAuth  │                 └───────────┘
-       └───────────┘
 ```
 
 ## Transport Layer
 
-### Streamable HTTP (Primary)
+Both transports are first-class citizens—the server supports either based on configuration.
 
-The MCP server uses Streamable HTTP as the primary transport, which provides bidirectional communication with built-in streaming support.
+### stdio Transport
 
-```typescript
-// src/index.ts
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { authenticateRequest, handleOAuthCallback } from "./auth/oauth.js";
+Used for sidecar mode (Tauri desktop app) and CLI integrations. The MCP protocol messages are exchanged via standard input/output streams.
 
-export interface Env {
-  // Cloudflare bindings
-  KV: KVNamespace;
-  DB: D1Database;
-  SESSIONS: DurableObjectNamespace;
-  WORKFLOWS: Workflow;
-  PYTHON_WORKER: Fetcher;
-  QUEUE: Queue;
-  R2: R2Bucket;
+```python
+# src/server/main.py
+import asyncio
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
 
-  // Secrets
-  JWT_SECRET: string;
-  TASTYTRADE_CLIENT_ID: string;
-  TASTYTRADE_CLIENT_SECRET: string;
-}
+from .tools import register_tools
+from .resources import register_resources
+from .prompts import register_prompts
+from ..services.database import DatabaseService
+from ..services.tastytrade import TastyTradeService
+from ..services.cache import CacheService
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
+async def run_stdio():
+    """Run the MCP server with stdio transport."""
+    server = await create_server()
 
-    // Health check endpoint
-    if (url.pathname === "/health") {
-      return new Response("ok", { status: 200 });
-    }
-
-    // OAuth callback endpoint
-    if (url.pathname === "/oauth/callback") {
-      return handleOAuthCallback(request, env);
-    }
-
-    // MCP endpoint with JWT authentication
-    if (url.pathname === "/mcp") {
-      return handleMcpRequest(request, env, ctx);
-    }
-
-    return new Response("Not Found", { status: 404 });
-  },
-};
-
-async function handleMcpRequest(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext
-): Promise<Response> {
-  // Verify session JWT (from TastyTrade OAuth flow)
-  const userContext = await authenticateRequest(request, env);
-  if (!userContext) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  // Create MCP server with user context
-  const server = createMcpServer(env, userContext);
-
-  // Handle with Streamable HTTP transport
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => `${userContext.userId}-${Date.now()}`,
-  });
-
-  await server.connect(transport);
-  return transport.handleRequest(request);
-}
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
 ```
 
-### SSE Fallback
+### HTTP/SSE Transport
 
-For clients that don't support Streamable HTTP, the server provides an SSE endpoint.
+Used for headless mode and network-accessible deployments. Enables external MCP clients (like Claude Desktop) to connect over HTTP.
 
-```typescript
-// src/transports/sse.ts
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+```python
+# src/server/main.py
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+import uvicorn
 
-export async function handleSseRequest(
-  request: Request,
-  env: Env,
-  userContext: UserContext
-): Promise<Response> {
-  const server = createMcpServer(env, userContext);
+async def run_sse(host: str = "localhost", port: int = 8080):
+    """Run the MCP server with HTTP/SSE transport."""
+    server = await create_server()
+    sse = SseServerTransport("/messages")
 
-  const transport = new SSEServerTransport("/mcp/sse", response);
-  await server.connect(transport);
+    async def handle_sse(request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await server.run(
+                streams[0], streams[1],
+                server.create_initialization_options()
+            )
 
-  // Return SSE response
-  return new Response(transport.readable, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-    },
-  });
-}
+    app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=sse.handle_post_message, methods=["POST"]),
+        ]
+    )
+
+    config = uvicorn.Config(app, host=host, port=port)
+    server = uvicorn.Server(config)
+    await server.serve()
 ```
 
-## TastyTrade OAuth Authentication
+### Transport Selection
 
-### Authentication Flow
+Transport is selected via CLI arguments or environment variables:
 
-Users authenticate directly via their TastyTrade account - no separate identity provider needed.
+```python
+# src/server/main.py
+import argparse
+import os
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    TastyTrade OAuth Flow                             │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  1. User clicks "Login with TastyTrade"                             │
-│                    │                                                 │
-│                    ▼                                                 │
-│  2. Redirect to TastyTrade OAuth authorize endpoint                 │
-│                    │                                                 │
-│                    ▼                                                 │
-│  3. User authenticates with TastyTrade credentials                  │
-│                    │                                                 │
-│                    ▼                                                 │
-│  4. TastyTrade redirects back with authorization code               │
-│                    │                                                 │
-│                    ▼                                                 │
-│  5. Exchange code for access_token + refresh_token                  │
-│                    │                                                 │
-│                    ▼                                                 │
-│  6. Create session JWT signed with our secret                       │
-│     (contains TastyTrade account ID as user identifier)             │
-│                    │                                                 │
-│                    ▼                                                 │
-│  7. Store encrypted TT tokens in D1 keyed by TT account ID          │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+async def main():
+    """Main entry point with transport selection."""
+    parser = argparse.ArgumentParser(description="TTAI MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default=os.getenv("TTAI_TRANSPORT", "stdio"),
+        help="Transport protocol (default: stdio)"
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("TTAI_HOST", "localhost"),
+        help="Host for SSE transport (default: localhost)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("TTAI_PORT", "8080")),
+        help="Port for SSE transport (default: 8080)"
+    )
+    args = parser.parse_args()
 
-### Session JWT Structure
+    if args.transport == "stdio":
+        await run_stdio()
+    else:
+        await run_sse(args.host, args.port)
 
-```typescript
-interface SessionJWT {
-  sub: string;           // TastyTrade account ID
-  email?: string;        // From TastyTrade account
-  iat: number;           // Issued at
-  exp: number;           // Expires (24h)
-}
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-### Auth Middleware
+## Server Configuration
 
-```typescript
-// src/auth/oauth.ts
-import { jwtVerify, SignJWT } from "jose";
+```python
+# src/server/config.py
+from dataclasses import dataclass, field
+from pathlib import Path
+import os
 
-export interface UserContext {
-  userId: string;        // TastyTrade account ID
-  email?: string;
-}
+@dataclass
+class ServerConfig:
+    """Configuration for the MCP server."""
 
-export async function authenticateRequest(
-  request: Request,
-  env: Env
-): Promise<UserContext | null> {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return null;
-  }
+    # Data directory (platform-specific)
+    data_dir: Path = field(default_factory=lambda: Path.home() / ".ttai")
 
-  const token = authHeader.slice(7);
+    # Database path
+    db_path: Path = None
 
-  try {
-    const secret = new TextEncoder().encode(env.JWT_SECRET);
-    const { payload } = await jwtVerify(token, secret);
+    # Log level
+    log_level: str = "INFO"
 
-    return {
-      userId: payload.sub as string,  // TastyTrade account ID
-      email: payload.email as string | undefined,
-    };
-  } catch {
-    return null;
-  }
-}
+    # Transport settings
+    transport: str = "stdio"  # "stdio" or "sse"
+    host: str = "localhost"
+    port: int = 8080
+
+    # Cache settings
+    quote_cache_ttl: int = 60  # seconds
+    chain_cache_ttl: int = 300  # seconds
+
+    # TastyTrade API
+    tastytrade_api_url: str = "https://api.tastyworks.com"
+
+    # Notification settings
+    notification_backend: str = "auto"  # "auto", "tauri", "webhook"
+    webhook_url: str | None = None
+
+    def __post_init__(self):
+        # Ensure data directory exists
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set database path
+        if self.db_path is None:
+            self.db_path = self.data_dir / "ttai.db"
+
+        # Create subdirectories
+        (self.data_dir / "knowledge").mkdir(exist_ok=True)
+        (self.data_dir / "exports").mkdir(exist_ok=True)
+        (self.data_dir / "logs").mkdir(exist_ok=True)
+
+        # Auto-detect notification backend
+        if self.notification_backend == "auto":
+            self.notification_backend = "tauri" if self.transport == "stdio" else "webhook"
+
+    @classmethod
+    def from_env(cls) -> "ServerConfig":
+        """Create config from environment variables."""
+        return cls(
+            data_dir=Path(os.getenv("TTAI_DATA_DIR", str(Path.home() / ".ttai"))),
+            log_level=os.getenv("TTAI_LOG_LEVEL", "INFO"),
+            transport=os.getenv("TTAI_TRANSPORT", "stdio"),
+            host=os.getenv("TTAI_HOST", "localhost"),
+            port=int(os.getenv("TTAI_PORT", "8080")),
+            tastytrade_api_url=os.getenv("TASTYTRADE_API_URL", "https://api.tastyworks.com"),
+            notification_backend=os.getenv("TTAI_NOTIFICATION_BACKEND", "auto"),
+            webhook_url=os.getenv("TTAI_WEBHOOK_URL"),
+        )
+
+# Global configuration instance
+config = ServerConfig.from_env()
 ```
 
-### OAuth Callback Handler
+## TastyTrade Authentication
 
-```typescript
-// src/auth/oauth.ts (continued)
-export async function handleOAuthCallback(
-  request: Request,
-  env: Env
-): Promise<Response> {
-  const url = new URL(request.url);
-  const code = url.searchParams.get("code");
+### Local Credential Storage
 
-  if (!code) {
-    return new Response("Missing authorization code", { status: 400 });
-  }
+User credentials are stored locally with encryption using Fernet symmetric encryption. No cloud storage is used.
 
-  // Exchange code for tokens with TastyTrade
-  const tokenResponse = await fetch("https://api.tastyworks.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "authorization_code",
-      code,
-      client_id: env.TASTYTRADE_CLIENT_ID,
-      client_secret: env.TASTYTRADE_CLIENT_SECRET,
-      redirect_uri: `${url.origin}/oauth/callback`,
-    }),
-  });
+```python
+# src/auth/credentials.py
+from cryptography.fernet import Fernet
+from pathlib import Path
+import json
+import os
 
-  if (!tokenResponse.ok) {
-    return new Response("Failed to exchange code for tokens", { status: 400 });
-  }
+class CredentialManager:
+    """Manages encrypted credential storage."""
 
-  const tokens = await tokenResponse.json<{
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  }>();
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+        self.key_file = data_dir / ".key"
+        self.creds_file = data_dir / ".credentials"
+        self._fernet = None
 
-  // Get TastyTrade account info
-  const accountResponse = await fetch("https://api.tastyworks.com/customers/me", {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
-  });
+    @property
+    def fernet(self) -> Fernet:
+        """Get or create the Fernet instance."""
+        if self._fernet is None:
+            self._fernet = Fernet(self._get_or_create_key())
+        return self._fernet
 
-  const account = await accountResponse.json<{
-    data: { id: string; email: string; "external-id": string };
-  }>();
+    def _get_or_create_key(self) -> bytes:
+        """Get existing key or create a new one."""
+        if self.key_file.exists():
+            return self.key_file.read_bytes()
 
-  const accountId = account.data["external-id"];
-  const email = account.data.email;
+        key = Fernet.generate_key()
+        self.key_file.write_bytes(key)
+        # Restrict permissions (Unix only)
+        if os.name != 'nt':
+            os.chmod(self.key_file, 0o600)
+        return key
 
-  // Upsert user in D1
-  await env.DB.prepare(
-    `INSERT INTO users (id, email, created_at, updated_at)
-     VALUES (?, ?, unixepoch(), unixepoch())
-     ON CONFLICT(id) DO UPDATE SET
-       email = excluded.email,
-       updated_at = unixepoch()`
-  ).bind(accountId, email).run();
+    def store_credentials(
+        self,
+        username: str,
+        session_token: str,
+        remember_token: str | None = None
+    ) -> None:
+        """Store encrypted credentials."""
+        data = {
+            "username": username,
+            "session_token": session_token,
+            "remember_token": remember_token,
+        }
+        encrypted = self.fernet.encrypt(json.dumps(data).encode())
+        self.creds_file.write_bytes(encrypted)
 
-  // Store encrypted TastyTrade tokens
-  await env.DB.prepare(
-    `INSERT OR REPLACE INTO user_oauth_tokens
-     (user_id, provider, access_token, refresh_token, expires_at)
-     VALUES (?, 'tastytrade', ?, ?, ?)`
-  ).bind(
-    accountId,
-    tokens.access_token,  // Should be encrypted in production
-    tokens.refresh_token,
-    Date.now() + tokens.expires_in * 1000
-  ).run();
+        if os.name != 'nt':
+            os.chmod(self.creds_file, 0o600)
 
-  // Create session JWT
-  const secret = new TextEncoder().encode(env.JWT_SECRET);
-  const sessionToken = await new SignJWT({ sub: accountId, email })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("24h")
-    .sign(secret);
+    def load_credentials(self) -> dict | None:
+        """Load and decrypt credentials."""
+        if not self.creds_file.exists():
+            return None
 
-  // Return token to client (frontend will store and use for subsequent requests)
-  return new Response(JSON.stringify({ token: sessionToken }), {
-    headers: { "Content-Type": "application/json" },
-  });
-}
+        try:
+            encrypted = self.creds_file.read_bytes()
+            decrypted = self.fernet.decrypt(encrypted)
+            return json.loads(decrypted.decode())
+        except Exception:
+            return None
+
+    def clear_credentials(self) -> None:
+        """Remove stored credentials."""
+        if self.creds_file.exists():
+            self.creds_file.unlink()
 ```
 
-### TastyTrade Token Management
+### TastyTrade Session Management
 
-```typescript
-// src/auth/tastytrade.ts
-export async function getTastyTradeTokens(
-  env: Env,
-  userId: string
-): Promise<OAuthTokens | null> {
-  const result = await env.DB.prepare(
-    `SELECT access_token, refresh_token, expires_at
-     FROM user_oauth_tokens
-     WHERE user_id = ? AND provider = 'tastytrade'`
-  )
-    .bind(userId)
-    .first<OAuthTokenRow>();
+```python
+# src/auth/tastytrade.py
+from tastytrade import Session
+from tastytrade.account import Account
+from typing import Optional
+import asyncio
 
-  if (!result) {
-    return null;
-  }
+class TastyTradeAuth:
+    """Handles TastyTrade authentication."""
 
-  // Check if token needs refresh
-  if (Date.now() > result.expires_at) {
-    return refreshTastyTradeToken(env, userId, result.refresh_token);
-  }
+    def __init__(self, credential_manager: CredentialManager):
+        self.creds = credential_manager
+        self._session: Optional[Session] = None
+        self._accounts: list[Account] = []
 
-  return {
-    accessToken: result.access_token,
-    refreshToken: result.refresh_token,
-    expiresAt: result.expires_at,
-  };
-}
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if we have a valid session."""
+        return self._session is not None and self._session.is_valid
 
-async function refreshTastyTradeToken(
-  env: Env,
-  userId: string,
-  refreshToken: string
-): Promise<OAuthTokens | null> {
-  const response = await fetch("https://api.tastyworks.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: env.TASTYTRADE_CLIENT_ID,
-      client_secret: env.TASTYTRADE_CLIENT_SECRET,
-    }),
-  });
+    async def login(self, username: str, password: str, remember_me: bool = False) -> bool:
+        """
+        Authenticate with TastyTrade.
 
-  if (!response.ok) {
-    return null;
-  }
+        Args:
+            username: TastyTrade username or email
+            password: TastyTrade password
+            remember_me: Store credentials for auto-login
 
-  const tokens = await response.json<{
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  }>();
+        Returns:
+            True if authentication successful
+        """
+        try:
+            # Create session using official tastytrade package
+            self._session = Session(username, password, remember_me=remember_me)
 
-  const newTokens = {
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresAt: Date.now() + tokens.expires_in * 1000,
-  };
+            # Fetch accounts
+            self._accounts = Account.get_accounts(self._session)
 
-  // Update stored tokens
-  await env.DB.prepare(
-    `UPDATE user_oauth_tokens
-     SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = unixepoch()
-     WHERE user_id = ? AND provider = 'tastytrade'`
-  ).bind(
-    newTokens.accessToken,
-    newTokens.refreshToken,
-    newTokens.expiresAt,
-    userId
-  ).run();
+            # Store credentials if remember_me
+            if remember_me:
+                self.creds.store_credentials(
+                    username=username,
+                    session_token=self._session.session_token,
+                    remember_token=self._session.remember_token
+                )
 
-  return newTokens;
-}
+            return True
+
+        except Exception as e:
+            self._session = None
+            self._accounts = []
+            raise AuthenticationError(f"Login failed: {e}")
+
+    async def restore_session(self) -> bool:
+        """Attempt to restore session from stored credentials."""
+        creds = self.creds.load_credentials()
+        if not creds:
+            return False
+
+        try:
+            # Restore session using remember token
+            if creds.get("remember_token"):
+                self._session = Session(
+                    creds["username"],
+                    remember_token=creds["remember_token"]
+                )
+            else:
+                return False
+
+            self._accounts = Account.get_accounts(self._session)
+            return True
+
+        except Exception:
+            self.creds.clear_credentials()
+            return False
+
+    async def logout(self) -> None:
+        """Log out and clear stored credentials."""
+        if self._session:
+            try:
+                self._session.destroy()
+            except Exception:
+                pass
+
+        self._session = None
+        self._accounts = []
+        self.creds.clear_credentials()
+
+    @property
+    def session(self) -> Session:
+        """Get the current session."""
+        if not self._session:
+            raise AuthenticationError("Not authenticated")
+        return self._session
+
+    @property
+    def accounts(self) -> list[Account]:
+        """Get user's accounts."""
+        return self._accounts
+
+    @property
+    def primary_account(self) -> Account:
+        """Get the primary (first) account."""
+        if not self._accounts:
+            raise AuthenticationError("No accounts available")
+        return self._accounts[0]
+
+
+class AuthenticationError(Exception):
+    """Raised when authentication fails."""
+    pass
 ```
 
 ## MCP Server Implementation
 
-### Server Factory
+### Tool Registration with Decorators
 
-```typescript
-// src/server/factory.ts
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerTools } from "./tools";
-import { registerResources } from "./resources";
-import { registerPrompts } from "./prompts";
+```python
+# src/server/tools.py
+from mcp.server import Server
+from mcp.types import Tool, TextContent
+from pydantic import BaseModel, Field
+from typing import Any
 
-export function createMcpServer(
-  env: Env,
-  userContext: UserContext
-): McpServer {
-  const server = new McpServer({
-    name: "ttai-mcp-server",
-    version: "1.0.0",
-  });
+def register_tools(
+    server: Server,
+    db: "DatabaseService",
+    tastytrade: "TastyTradeService",
+    cache: "CacheService"
+) -> None:
+    """Register all MCP tools."""
 
-  // Create service context with user-scoped bindings
-  const services = {
-    kv: env.KV,
-    db: env.DB,
-    r2: env.R2,
-    queue: env.QUEUE,
-    workflows: env.WORKFLOWS,
-    pythonWorker: env.PYTHON_WORKER,
-    userId: userContext.userId,
-  };
+    # Tool input schemas using Pydantic
+    class GetQuoteInput(BaseModel):
+        symbol: str = Field(description="Stock or ETF symbol")
 
-  // Register capabilities
-  registerTools(server, services);
-  registerResources(server, services);
-  registerPrompts(server, services);
+    class GetOptionChainInput(BaseModel):
+        symbol: str = Field(description="Underlying symbol")
+        expiration: str | None = Field(
+            default=None,
+            description="Expiration date (YYYY-MM-DD) or None for all"
+        )
 
-  return server;
-}
-```
+    class AnalyzeChartInput(BaseModel):
+        symbol: str = Field(description="Symbol to analyze")
+        timeframe: str = Field(
+            default="daily",
+            description="Timeframe: intraday, daily, weekly"
+        )
 
-### Tool Registration
+    class RunFullAnalysisInput(BaseModel):
+        symbol: str = Field(description="Symbol to analyze")
+        strategy: str = Field(
+            default="csp",
+            description="Strategy: csp, covered_call, spread"
+        )
 
-```typescript
-// src/server/tools.ts
-import { z } from "zod";
+    # Register tools
+    @server.tool()
+    async def get_quote(symbol: str) -> list[TextContent]:
+        """Get real-time quote for a symbol."""
+        quote = await tastytrade.get_quote(symbol)
+        return [TextContent(
+            type="text",
+            text=json.dumps(quote, indent=2)
+        )]
 
-export function registerTools(server: McpServer, services: Services): void {
-  // Quote lookup tool
-  server.tool(
-    "get_quote",
-    "Get real-time quote for a symbol",
-    {
-      symbol: z.string().describe("Stock or ETF symbol"),
-    },
-    async ({ symbol }) => {
-      // Check KV cache first
-      const cached = await services.kv.get(`quote:${symbol}`, "json");
-      if (cached) {
-        return { content: [{ type: "text", text: JSON.stringify(cached) }] };
-      }
+    @server.tool()
+    async def get_option_chain(
+        symbol: str,
+        expiration: str | None = None
+    ) -> list[TextContent]:
+        """Get option chain for a symbol."""
+        chain = await tastytrade.get_option_chain(symbol, expiration)
+        return [TextContent(
+            type="text",
+            text=json.dumps(chain, indent=2)
+        )]
 
-      // Fetch from Python worker (which calls TastyTrade)
-      const response = await services.pythonWorker.fetch(
-        new Request("https://internal/quotes", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-User-Id": services.userId,
-          },
-          body: JSON.stringify({ symbols: [symbol] }),
-        })
-      );
+    @server.tool()
+    async def get_positions() -> list[TextContent]:
+        """Get current portfolio positions."""
+        positions = await tastytrade.get_positions()
+        return [TextContent(
+            type="text",
+            text=json.dumps(positions, indent=2)
+        )]
 
-      const quote = await response.json();
+    @server.tool()
+    async def analyze_chart(
+        symbol: str,
+        timeframe: str = "daily"
+    ) -> list[TextContent]:
+        """Run AI-powered chart analysis on a symbol."""
+        from ..agents.chart_analyst import ChartAnalyst
 
-      // Cache with short TTL
-      await services.kv.put(`quote:${symbol}`, JSON.stringify(quote), {
-        expirationTtl: 60, // 1 minute
-      });
+        agent = ChartAnalyst(tastytrade, cache)
+        result = await agent.analyze(symbol, timeframe)
 
-      return { content: [{ type: "text", text: JSON.stringify(quote) }] };
-    }
-  );
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
 
-  // Chart analysis tool - triggers workflow
-  server.tool(
-    "analyze_chart",
-    "Run AI-powered chart analysis on a symbol",
-    {
-      symbol: z.string().describe("Stock or ETF symbol"),
-      timeframe: z.enum(["intraday", "daily", "weekly"]).default("daily"),
-    },
-    async ({ symbol, timeframe }) => {
-      // Start Cloudflare Workflow for durable execution
-      const instance = await services.workflows.create({
-        params: {
-          type: "chart_analysis",
-          userId: services.userId,
-          symbol,
-          timeframe,
-        },
-      });
+    @server.tool()
+    async def analyze_options(
+        symbol: str,
+        strategy: str = "csp",
+        chart_context: dict | None = None
+    ) -> list[TextContent]:
+        """Run options analysis for a symbol."""
+        from ..agents.options_analyst import OptionsAnalyst
 
-      // Wait for completion (or timeout)
-      const result = await instance.status();
+        agent = OptionsAnalyst(tastytrade, cache)
+        result = await agent.analyze(symbol, strategy, chart_context)
 
-      if (result.status === "complete") {
-        return {
-          content: [{ type: "text", text: JSON.stringify(result.output) }],
-        };
-      }
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Analysis started. Workflow ID: ${instance.id}`,
-          },
-        ],
-      };
-    }
-  );
+    @server.tool()
+    async def run_full_analysis(
+        symbol: str,
+        strategy: str = "csp"
+    ) -> list[TextContent]:
+        """Run comprehensive analysis including chart, options, and research."""
+        from ..agents.orchestrator import AnalysisOrchestrator
 
-  // Full analysis tool
-  server.tool(
-    "run_full_analysis",
-    "Run comprehensive analysis including chart, options, and research",
-    {
-      symbol: z.string().describe("Stock or ETF symbol"),
-      strategy: z.enum(["csp", "covered_call", "spread"]).default("csp"),
-    },
-    async ({ symbol, strategy }) => {
-      const instance = await services.workflows.create({
-        params: {
-          type: "full_analysis",
-          userId: services.userId,
-          symbol,
-          strategy,
-        },
-      });
+        orchestrator = AnalysisOrchestrator(tastytrade, cache, db)
+        result = await orchestrator.run_full_analysis(symbol, strategy)
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Full analysis started. Workflow ID: ${instance.id}. Use get_workflow_status to check progress.`,
-          },
-        ],
-      };
-    }
-  );
+        # Save to database
+        await db.save_analysis(symbol, "full", result)
 
-  // Workflow status tool
-  server.tool(
-    "get_workflow_status",
-    "Check status of a running workflow",
-    {
-      workflowId: z.string().describe("Workflow instance ID"),
-    },
-    async ({ workflowId }) => {
-      const instance = services.workflows.get(workflowId);
-      const status = await instance.status();
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )]
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(status) }],
-      };
-    }
-  );
-}
+    @server.tool()
+    async def search_knowledge(
+        query: str,
+        limit: int = 5
+    ) -> list[TextContent]:
+        """Search the knowledge base for relevant information."""
+        from ..services.knowledge import KnowledgeService
+
+        knowledge = KnowledgeService(db)
+        results = await knowledge.search(query, limit)
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(results, indent=2)
+        )]
+
+    @server.tool()
+    async def set_price_alert(
+        symbol: str,
+        condition: str,
+        threshold: float
+    ) -> list[TextContent]:
+        """Set a price alert for a symbol."""
+        alert_id = await db.create_alert(
+            symbol=symbol,
+            alert_type="price",
+            condition=condition,  # "above" or "below"
+            threshold=threshold
+        )
+
+        return [TextContent(
+            type="text",
+            text=f"Alert created with ID: {alert_id}"
+        )]
 ```
 
 ### Resource Registration
 
-```typescript
-// src/server/resources.ts
-export function registerResources(server: McpServer, services: Services): void {
-  // Portfolio resource
-  server.resource(
-    "portfolio://positions",
-    "Current portfolio positions",
-    async () => {
-      const positions = await services.db
-        .prepare(
-          `SELECT * FROM positions WHERE user_id = ? AND status = 'open'`
-        )
-        .bind(services.userId)
-        .all();
+```python
+# src/server/resources.py
+from mcp.server import Server
+from mcp.types import Resource, TextResourceContents
+import json
 
-      return {
-        contents: [
-          {
-            uri: "portfolio://positions",
-            mimeType: "application/json",
-            text: JSON.stringify(positions.results),
-          },
-        ],
-      };
-    }
-  );
+def register_resources(
+    server: Server,
+    db: "DatabaseService",
+    tastytrade: "TastyTradeService"
+) -> None:
+    """Register all MCP resources."""
 
-  // Knowledge base resources
-  server.resource(
-    "knowledge://options/strategies",
-    "Options trading strategies knowledge",
-    async () => {
-      const doc = await services.r2.get("knowledge/options/strategies.md");
-      const content = await doc?.text();
+    @server.resource("portfolio://positions")
+    async def get_positions_resource() -> str:
+        """Current portfolio positions."""
+        positions = await tastytrade.get_positions()
+        return json.dumps(positions, indent=2)
 
-      return {
-        contents: [
-          {
-            uri: "knowledge://options/strategies",
-            mimeType: "text/markdown",
-            text: content || "Not found",
-          },
-        ],
-      };
-    }
-  );
+    @server.resource("portfolio://balances")
+    async def get_balances_resource() -> str:
+        """Account balances and buying power."""
+        balances = await tastytrade.get_balances()
+        return json.dumps(balances, indent=2)
 
-  // Analysis history resource
-  server.resource(
-    "history://analyses",
-    "Recent analysis results",
-    async () => {
-      const analyses = await services.db
-        .prepare(
-          `SELECT * FROM analyses
-           WHERE user_id = ?
-           ORDER BY created_at DESC
-           LIMIT 20`
-        )
-        .bind(services.userId)
-        .all();
+    @server.resource("history://analyses")
+    async def get_analyses_resource() -> str:
+        """Recent analysis results."""
+        analyses = await db.get_recent_analyses(limit=20)
+        return json.dumps(analyses, indent=2)
 
-      return {
-        contents: [
-          {
-            uri: "history://analyses",
-            mimeType: "application/json",
-            text: JSON.stringify(analyses.results),
-          },
-        ],
-      };
-    }
-  );
-}
+    @server.resource("history://analyses/{symbol}")
+    async def get_symbol_analyses_resource(symbol: str) -> str:
+        """Analysis history for a specific symbol."""
+        analyses = await db.get_analyses_by_symbol(symbol)
+        return json.dumps(analyses, indent=2)
+
+    @server.resource("alerts://active")
+    async def get_active_alerts_resource() -> str:
+        """Active price and position alerts."""
+        alerts = await db.get_active_alerts()
+        return json.dumps(alerts, indent=2)
+
+    @server.resource("knowledge://options/strategies/{strategy}")
+    async def get_strategy_resource(strategy: str) -> str:
+        """Options strategy documentation."""
+        from ..services.knowledge import KnowledgeService
+
+        knowledge = KnowledgeService(db)
+        doc = await knowledge.get_document(f"options/strategies/{strategy}.md")
+        return doc or f"Strategy not found: {strategy}"
+
+    # List available resources
+    @server.list_resources()
+    async def list_resources() -> list[Resource]:
+        """List all available resources."""
+        return [
+            Resource(
+                uri="portfolio://positions",
+                name="Portfolio Positions",
+                description="Current open positions",
+                mimeType="application/json"
+            ),
+            Resource(
+                uri="portfolio://balances",
+                name="Account Balances",
+                description="Account balances and buying power",
+                mimeType="application/json"
+            ),
+            Resource(
+                uri="history://analyses",
+                name="Analysis History",
+                description="Recent analysis results",
+                mimeType="application/json"
+            ),
+            Resource(
+                uri="alerts://active",
+                name="Active Alerts",
+                description="Active price and position alerts",
+                mimeType="application/json"
+            ),
+        ]
 ```
 
-## Cloudflare Bindings
+### Prompt Registration
 
-### wrangler.toml Configuration
+```python
+# src/server/prompts.py
+from mcp.server import Server
+from mcp.types import Prompt, PromptArgument, PromptMessage, TextContent
 
-```toml
-# wrangler.toml
-name = "ttai-mcp-server"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
-compatibility_flags = ["nodejs_compat"]
+def register_prompts(server: Server) -> None:
+    """Register all MCP prompts."""
 
-# KV Namespace for caching
-[[kv_namespaces]]
-binding = "KV"
-id = "your-kv-namespace-id"
+    @server.prompt("analyze-for-csp")
+    async def analyze_for_csp_prompt(symbol: str) -> list[PromptMessage]:
+        """Prompt for analyzing a symbol for cash-secured put opportunities."""
+        return [
+            PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text=f"""Analyze {symbol} for a cash-secured put opportunity.
 
-# D1 Database
-[[d1_databases]]
-binding = "DB"
-database_name = "ttai"
-database_id = "your-d1-database-id"
+Please:
+1. Use the analyze_chart tool to get technical analysis
+2. Use the analyze_options tool with strategy="csp" to find optimal strikes
+3. Check current positions with get_positions
+4. Provide a recommendation with specific strike and expiration
 
-# Durable Objects
-[[durable_objects.bindings]]
-name = "SESSIONS"
-class_name = "SessionDurableObject"
+Consider:
+- Current trend and support levels
+- IV rank and premium available
+- Risk/reward profile
+- Position sizing relative to portfolio"""
+                )
+            )
+        ]
 
-# Workflows
-[[workflows]]
-binding = "WORKFLOWS"
-name = "ttai-workflow"
-class_name = "TTAIWorkflow"
+    @server.prompt("morning-briefing")
+    async def morning_briefing_prompt() -> list[PromptMessage]:
+        """Prompt for generating a morning market briefing."""
+        return [
+            PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text="""Generate a morning briefing for my portfolio.
 
-# Service binding to Python Worker
-[[services]]
-binding = "PYTHON_WORKER"
-service = "ttai-python-worker"
+Please:
+1. Get current positions with get_positions
+2. Get quotes for each position
+3. Check for any positions approaching expiration (< 7 DTE)
+4. Identify any positions with significant P&L changes
+5. Suggest any adjustments or new opportunities
 
-# Queue for async processing
-[[queues.producers]]
-binding = "QUEUE"
-queue = "ttai-tasks"
+Format as a concise briefing I can review quickly."""
+                )
+            )
+        ]
 
-# R2 Bucket for storage
-[[r2_buckets]]
-binding = "R2"
-bucket_name = "ttai-storage"
+    @server.prompt("position-review")
+    async def position_review_prompt(symbol: str) -> list[PromptMessage]:
+        """Prompt for reviewing a specific position."""
+        return [
+            PromptMessage(
+                role="user",
+                content=TextContent(
+                    type="text",
+                    text=f"""Review my position in {symbol}.
 
-# Environment variables
-[vars]
-ENVIRONMENT = "production"
+Please:
+1. Get current quote and position details
+2. Analyze current chart setup
+3. Evaluate if position should be:
+   - Held to expiration
+   - Rolled to new strike/expiration
+   - Closed for profit/loss
+4. Provide specific recommendations"""
+                )
+            )
+        ]
 
-# Secrets (set via wrangler secret)
-# JWT_SECRET
-# TASTYTRADE_CLIENT_ID
-# TASTYTRADE_CLIENT_SECRET
-```
-
-## Session Management with Durable Objects
-
-### Session Durable Object
-
-```typescript
-// src/durableObjects/session.ts
-export class SessionDurableObject implements DurableObject {
-  private state: DurableObjectState;
-  private sessions: Map<string, WebSocket> = new Map();
-
-  constructor(state: DurableObjectState, env: Env) {
-    this.state = state;
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/websocket") {
-      return this.handleWebSocket(request);
-    }
-
-    if (url.pathname === "/broadcast") {
-      return this.handleBroadcast(request);
-    }
-
-    return new Response("Not Found", { status: 404 });
-  }
-
-  async handleWebSocket(request: Request): Promise<Response> {
-    const upgradeHeader = request.headers.get("Upgrade");
-    if (upgradeHeader !== "websocket") {
-      return new Response("Expected WebSocket", { status: 426 });
-    }
-
-    const [client, server] = Object.values(new WebSocketPair());
-
-    // Use hibernation for cost efficiency
-    this.state.acceptWebSocket(server);
-
-    const sessionId = crypto.randomUUID();
-    server.serializeAttachment({ sessionId });
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    });
-  }
-
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const data = JSON.parse(message as string);
-
-    // Handle incoming messages
-    if (data.type === "subscribe") {
-      const attachment = ws.deserializeAttachment() as { sessionId: string; subscriptions?: string[] };
-      attachment.subscriptions = data.channels;
-      ws.serializeAttachment(attachment);
-    }
-  }
-
-  async webSocketClose(ws: WebSocket): Promise<void> {
-    // Cleanup handled automatically by hibernation
-  }
-
-  async handleBroadcast(request: Request): Promise<Response> {
-    const { channel, message } = await request.json<{
-      channel: string;
-      message: unknown;
-    }>();
-
-    // Broadcast to all connected WebSockets subscribed to this channel
-    for (const ws of this.state.getWebSockets()) {
-      const attachment = ws.deserializeAttachment() as {
-        subscriptions?: string[];
-      };
-
-      if (attachment.subscriptions?.includes(channel)) {
-        ws.send(JSON.stringify({ channel, data: message }));
-      }
-    }
-
-    return new Response("ok");
-  }
-}
-```
-
-## Multi-Tenancy Patterns
-
-### User-Scoped Queries
-
-All database queries include user_id for row-level isolation:
-
-```typescript
-// src/services/database.ts
-export class UserScopedDB {
-  constructor(
-    private db: D1Database,
-    private userId: string
-  ) {}
-
-  async getPositions(): Promise<Position[]> {
-    const result = await this.db
-      .prepare("SELECT * FROM positions WHERE user_id = ?")
-      .bind(this.userId)
-      .all();
-    return result.results as Position[];
-  }
-
-  async getAnalyses(limit = 20): Promise<Analysis[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT * FROM analyses
-         WHERE user_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?`
-      )
-      .bind(this.userId, limit)
-      .all();
-    return result.results as Analysis[];
-  }
-
-  async saveAnalysis(analysis: Omit<Analysis, "id" | "user_id">): Promise<void> {
-    await this.db
-      .prepare(
-        `INSERT INTO analyses (user_id, symbol, type, result, created_at)
-         VALUES (?, ?, ?, ?, ?)`
-      )
-      .bind(
-        this.userId,
-        analysis.symbol,
-        analysis.type,
-        JSON.stringify(analysis.result),
-        Date.now()
-      )
-      .run();
-  }
-}
-```
-
-### User-Scoped Cache Keys
-
-KV cache keys are namespaced by user:
-
-```typescript
-// src/services/cache.ts
-export class UserScopedCache {
-  constructor(
-    private kv: KVNamespace,
-    private userId: string
-  ) {}
-
-  private key(base: string): string {
-    return `user:${this.userId}:${base}`;
-  }
-
-  async get<T>(key: string): Promise<T | null> {
-    return this.kv.get(this.key(key), "json");
-  }
-
-  async set(key: string, value: unknown, ttl?: number): Promise<void> {
-    await this.kv.put(this.key(key), JSON.stringify(value), {
-      expirationTtl: ttl,
-    });
-  }
-
-  async delete(key: string): Promise<void> {
-    await this.kv.delete(this.key(key));
-  }
-}
+    # List available prompts
+    @server.list_prompts()
+    async def list_prompts() -> list[Prompt]:
+        """List all available prompts."""
+        return [
+            Prompt(
+                name="analyze-for-csp",
+                description="Analyze a symbol for cash-secured put opportunities",
+                arguments=[
+                    PromptArgument(
+                        name="symbol",
+                        description="Stock symbol to analyze",
+                        required=True
+                    )
+                ]
+            ),
+            Prompt(
+                name="morning-briefing",
+                description="Generate a morning market briefing",
+                arguments=[]
+            ),
+            Prompt(
+                name="position-review",
+                description="Review a specific position",
+                arguments=[
+                    PromptArgument(
+                        name="symbol",
+                        description="Symbol of position to review",
+                        required=True
+                    )
+                ]
+            ),
+        ]
 ```
 
 ## Error Handling
 
-```typescript
-// src/utils/errors.ts
-export class TTAIError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public statusCode: number = 500,
-    public retryable: boolean = false
-  ) {
-    super(message);
-    this.name = "TTAIError";
-  }
+### Error Types
 
-  toJSON() {
-    return {
-      error: {
-        code: this.code,
-        message: this.message,
-        retryable: this.retryable,
-      },
-    };
-  }
-}
+```python
+# src/server/errors.py
+from enum import Enum
+from typing import Any
 
-export class AuthenticationError extends TTAIError {
-  constructor(message = "Authentication required") {
-    super(message, "AUTHENTICATION_ERROR", 401, false);
-  }
-}
+class ErrorCode(str, Enum):
+    """Standard error codes."""
+    AUTHENTICATION_ERROR = "AUTHENTICATION_ERROR"
+    AUTHORIZATION_ERROR = "AUTHORIZATION_ERROR"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    NOT_FOUND = "NOT_FOUND"
+    RATE_LIMIT = "RATE_LIMIT"
+    TASTYTRADE_ERROR = "TASTYTRADE_ERROR"
+    ANALYSIS_ERROR = "ANALYSIS_ERROR"
+    DATABASE_ERROR = "DATABASE_ERROR"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
-export class RateLimitError extends TTAIError {
-  constructor(retryAfter: number) {
-    super(`Rate limited. Retry after ${retryAfter}s`, "RATE_LIMIT", 429, true);
-  }
-}
+class TTAIError(Exception):
+    """Base error class for TTAI."""
 
-export class ValidationError extends TTAIError {
-  constructor(message: string) {
-    super(message, "VALIDATION_ERROR", 400, false);
-  }
-}
+    def __init__(
+        self,
+        message: str,
+        code: ErrorCode = ErrorCode.INTERNAL_ERROR,
+        retryable: bool = False,
+        details: dict[str, Any] | None = None
+    ):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = details or {}
+
+    def to_dict(self) -> dict:
+        return {
+            "error": {
+                "code": self.code.value,
+                "message": str(self),
+                "retryable": self.retryable,
+                "details": self.details
+            }
+        }
+
+class AuthenticationError(TTAIError):
+    def __init__(self, message: str = "Authentication required"):
+        super().__init__(message, ErrorCode.AUTHENTICATION_ERROR, False)
+
+class ValidationError(TTAIError):
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, ErrorCode.VALIDATION_ERROR, False, details)
+
+class TastyTradeError(TTAIError):
+    def __init__(self, message: str, retryable: bool = True):
+        super().__init__(message, ErrorCode.TASTYTRADE_ERROR, retryable)
+
+class RateLimitError(TTAIError):
+    def __init__(self, retry_after: int = 60):
+        super().__init__(
+            f"Rate limited. Retry after {retry_after}s",
+            ErrorCode.RATE_LIMIT,
+            True,
+            {"retry_after": retry_after}
+        )
+```
+
+### Error Handling Middleware
+
+```python
+# src/server/middleware.py
+import logging
+import traceback
+from functools import wraps
+from typing import Callable, TypeVar, ParamSpec
+
+from .errors import TTAIError, ErrorCode
+
+logger = logging.getLogger(__name__)
+
+P = ParamSpec('P')
+T = TypeVar('T')
+
+def handle_errors(func: Callable[P, T]) -> Callable[P, T]:
+    """Decorator to handle errors in tool handlers."""
+    @wraps(func)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        try:
+            return await func(*args, **kwargs)
+        except TTAIError:
+            # Re-raise known errors
+            raise
+        except Exception as e:
+            # Log unexpected errors
+            logger.error(f"Unexpected error in {func.__name__}: {e}")
+            logger.error(traceback.format_exc())
+
+            # Wrap in TTAIError
+            raise TTAIError(
+                f"Internal error: {e}",
+                ErrorCode.INTERNAL_ERROR,
+                retryable=True
+            )
+
+    return wrapper
+```
+
+## Notification System
+
+See [Background Tasks](./06-background-tasks.md) for the complete notification system implementation, which supports both Tauri (stderr) and webhook notification backends.
+
+```python
+# src/server/notifications.py (summary)
+from abc import ABC, abstractmethod
+
+class NotificationBackend(ABC):
+    @abstractmethod
+    async def send(self, notification: Notification) -> None: ...
+
+class TauriNotifier(NotificationBackend):
+    """Emits to stderr for Tauri to capture (sidecar mode)."""
+    ...
+
+class WebhookNotifier(NotificationBackend):
+    """POSTs to configured webhook URLs (headless mode)."""
+    ...
 ```
 
 ## Cross-References
 
-- [Workflow Orchestration](./02-workflow-orchestration.md) - Cloudflare Workflows for durable execution
-- [Python Workers](./03-python-workers.md) - TastyTrade API and AI agents
-- [Data Layer](./05-data-layer.md) - KV, D1, R2 storage patterns
-- [Integration Patterns](./09-integration-patterns.md) - Worker-to-Worker communication
+- [Workflow Orchestration](./02-workflow-orchestration.md) - Python asyncio task orchestration
+- [Python Server](./03-python-server.md) - Server architecture, running modes, and project structure
+- [Data Layer](./05-data-layer.md) - SQLite database and credential storage
+- [Background Tasks](./06-background-tasks.md) - Notification system with Tauri and webhook backends
+- [Integration Patterns](./09-integration-patterns.md) - Tauri ↔ Python and HTTP/SSE communication
+- [Local Development](./10-local-development.md) - Running in sidecar and headless modes

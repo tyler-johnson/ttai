@@ -2,650 +2,630 @@
 
 ## Overview
 
-The TTAI knowledge base provides trading and options education content accessible to AI agents during analysis. Documents are stored in Cloudflare R2, with semantic search powered by Cloudflare Vectorize. The system supports both direct document access via MCP resources and similarity search for context retrieval.
+The TTAI knowledge base provides trading and options education content accessible to AI agents during analysis. Documents are stored locally in `~/.ttai/knowledge/`, with semantic search powered by sentence-transformers for local embeddings and sqlite-vec for vector storage. The system supports both direct document access via MCP resources and similarity search for context retrieval (RAG).
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Cloudflare Edge Network                          │
+│                    Python MCP Server (Sidecar)                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │              MCP Server (Resource Access)                       │ │
-│  │         knowledge://options/strategies                          │ │
+│  │              Knowledge Service (MCP Resources)                  │ │
+│  │         knowledge://options/strategies/csp                      │ │
 │  │         knowledge://trading/risk-management                     │ │
 │  └──────────────────────────┬─────────────────────────────────────┘ │
 │                             │                                        │
 │      ┌──────────────────────┼──────────────────────┐                │
 │      ▼                      ▼                      ▼                │
 │  ┌────────────┐    ┌────────────────┐    ┌────────────────┐        │
-│  │Cloudflare  │    │  Cloudflare    │    │  Workers AI    │        │
-│  │    R2      │    │   Vectorize    │    │  (Embeddings)  │        │
-│  │ (Storage)  │    │   (Search)     │    │                │        │
+│  │   File     │    │    SQLite      │    │  sentence-     │        │
+│  │  System    │    │  (sqlite-vec)  │    │  transformers  │        │
 │  │            │    │                │    │                │        │
-│  │ - Markdown │    │ - Chunk index  │    │ - bge-base-en  │        │
-│  │ - PDFs     │    │ - Similarity   │    │ - text-embed-  │        │
-│  │ - Images   │    │   search       │    │   ada-002      │        │
+│  │ - Markdown │    │ - Chunk store  │    │ - all-MiniLM-  │        │
+│  │ - PDFs     │    │ - Embeddings   │    │   L6-v2        │        │
+│  │ - Text     │    │ - Metadata     │    │ - Local model  │        │
 │  └────────────┘    └────────────────┘    └────────────────┘        │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Document Storage (R2)
+## Document Storage
 
 ### Directory Structure
 
 ```
-ttai-storage/
-├── knowledge/
-│   ├── options/
-│   │   ├── strategies/
-│   │   │   ├── cash-secured-put.md
-│   │   │   ├── covered-call.md
-│   │   │   ├── wheel.md
-│   │   │   ├── iron-condor.md
-│   │   │   ├── bull-put-spread.md
-│   │   │   └── bear-call-spread.md
-│   │   ├── greeks/
-│   │   │   ├── delta.md
-│   │   │   ├── gamma.md
-│   │   │   ├── theta.md
-│   │   │   ├── vega.md
-│   │   │   └── rho.md
-│   │   └── concepts/
-│   │       ├── implied-volatility.md
-│   │       ├── iv-rank.md
-│   │       ├── iv-percentile.md
-│   │       └── option-pricing.md
-│   ├── trading/
-│   │   ├── risk-management.md
-│   │   ├── position-sizing.md
-│   │   ├── portfolio-management.md
-│   │   └── trade-psychology.md
-│   ├── technical/
-│   │   ├── support-resistance.md
-│   │   ├── trend-analysis.md
-│   │   ├── fibonacci.md
-│   │   └── indicators.md
-│   └── tastytrade/
-│       ├── api-reference.md
-│       ├── order-types.md
-│       └── account-types.md
-│
-└── embeddings/
-    └── chunks/
-        ├── index.json          # Chunk metadata
-        └── vectors.bin         # Pre-computed vectors (backup)
+~/.ttai/knowledge/
+├── options/
+│   └── strategies/
+│       ├── csp.md                    # Cash-Secured Puts
+│       ├── covered_call.md           # Covered Calls
+│       ├── spreads.md                # Vertical Spreads
+│       ├── iron_condor.md            # Iron Condors
+│       └── wheel.md                  # The Wheel Strategy
+├── trading/
+│   ├── risk-management.md            # Position Sizing, Risk Rules
+│   ├── technical-analysis.md         # Chart Patterns, Indicators
+│   └── psychology.md                 # Trading Psychology
+├── research/
+│   ├── earnings-analysis.md          # How to Analyze Earnings
+│   └── sector-overview.md            # Sector Analysis Framework
+└── custom/
+    └── my-notes.md                   # User's custom notes
 ```
 
 ### Document Format
 
-Documents use frontmatter for metadata:
+Documents should be markdown with YAML frontmatter for metadata:
 
 ```markdown
 ---
 title: Cash-Secured Put Strategy
 category: options/strategies
-tags: [premium-selling, bullish, neutral]
+tags: [csp, put-selling, income]
 difficulty: beginner
-related:
-  - covered-call
-  - wheel
-  - bull-put-spread
-updated: 2024-01-15
+last_updated: 2024-01-15
 ---
 
-# Cash-Secured Put (CSP)
+# Cash-Secured Put (CSP) Strategy
 
 ## Overview
 
 A cash-secured put is an options strategy where you sell a put option
-while holding enough cash to purchase the underlying stock if assigned.
+while holding enough cash to buy the underlying stock if assigned.
 
 ## When to Use
 
-- **Bullish to neutral** outlook on the underlying
-- Want to potentially acquire shares at a discount
-- Comfortable owning the stock at the strike price
-- Elevated implied volatility (better premiums)
-
-## Risk/Reward Profile
-
-| Metric          | Value                              |
-| --------------- | ---------------------------------- |
-| Max Profit      | Premium received                   |
-| Max Loss        | Strike price - premium (if → $0)   |
-| Breakeven       | Strike price - premium             |
-| Capital Req.    | Strike × 100 (per contract)        |
-
-## Example
+- Bullish or neutral outlook on the underlying
+- Willing to own the stock at the strike price
+- Want to generate income while waiting to buy
 
 ...
 ```
 
-### R2 Document Service
+## Embedding Pipeline
 
-```typescript
-// src/services/knowledge.ts
-export class KnowledgeService {
-  constructor(
-    private r2: R2Bucket,
-    private vectorize: VectorizeIndex
-  ) {}
+### Sentence Transformers Setup
 
-  async getDocument(path: string): Promise<KnowledgeDocument | null> {
-    const object = await this.r2.get(`knowledge/${path}`);
-    if (!object) return null;
+```python
+# src/services/embeddings.py
+import logging
+from typing import List, Optional
+import numpy as np
 
-    const content = await object.text();
-    const { frontmatter, body } = this.parseFrontmatter(content);
+logger = logging.getLogger(__name__)
 
-    return {
-      path,
-      title: frontmatter.title,
-      category: frontmatter.category,
-      tags: frontmatter.tags || [],
-      content: body,
-      metadata: frontmatter,
-    };
-  }
+# Lazy load the model to reduce startup time
+_model = None
 
-  async listDocuments(prefix?: string): Promise<DocumentInfo[]> {
-    const path = prefix ? `knowledge/${prefix}` : "knowledge/";
-    const listed = await this.r2.list({ prefix: path });
+def get_embedding_model():
+    """Get or initialize the embedding model."""
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
+        logger.info("Loading embedding model...")
+        _model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Embedding model loaded")
+    return _model
 
-    return listed.objects
-      .filter((obj) => obj.key.endsWith(".md"))
-      .map((obj) => ({
-        path: obj.key.replace("knowledge/", ""),
-        size: obj.size,
-        updated: obj.uploaded,
-      }));
-  }
+def generate_embedding(text: str) -> List[float]:
+    """
+    Generate embedding for a text string.
 
-  async searchDocuments(query: string, limit = 5): Promise<SearchResult[]> {
-    // Generate embedding for query
-    const embedding = await this.generateEmbedding(query);
+    Uses all-MiniLM-L6-v2 which produces 384-dimensional embeddings.
+    This model is small (~80MB), fast, and works well for semantic search.
+    """
+    model = get_embedding_model()
+    embedding = model.encode(text, normalize_embeddings=True)
+    return embedding.tolist()
 
-    // Search Vectorize
-    const results = await this.vectorize.query(embedding, {
-      topK: limit,
-      returnMetadata: true,
-    });
+def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
+    """Generate embeddings for multiple texts efficiently."""
+    model = get_embedding_model()
+    embeddings = model.encode(texts, normalize_embeddings=True)
+    return [e.tolist() for e in embeddings]
 
-    // Fetch full documents for top results
-    const documents = await Promise.all(
-      results.matches.map(async (match) => {
-        const doc = await this.getDocument(match.metadata?.path as string);
-        return {
-          document: doc,
-          score: match.score,
-          chunk: match.metadata?.chunk as string,
-        };
-      })
-    );
-
-    return documents.filter((d) => d.document !== null) as SearchResult[];
-  }
-
-  private parseFrontmatter(content: string): {
-    frontmatter: Record<string, any>;
-    body: string;
-  } {
-    const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-    if (!match) {
-      return { frontmatter: {}, body: content };
-    }
-
-    // Simple YAML parsing (use js-yaml in production)
-    const frontmatter: Record<string, any> = {};
-    match[1].split("\n").forEach((line) => {
-      const [key, ...valueParts] = line.split(":");
-      if (key && valueParts.length) {
-        const value = valueParts.join(":").trim();
-        frontmatter[key.trim()] = value.startsWith("[")
-          ? JSON.parse(value.replace(/'/g, '"'))
-          : value;
-      }
-    });
-
-    return { frontmatter, body: match[2] };
-  }
-
-  private async generateEmbedding(text: string): Promise<number[]> {
-    // Use Workers AI for embeddings
-    const response = await fetch(
-      "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/baai/bge-base-en-v1.5",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: [text] }),
-      }
-    );
-
-    const result = await response.json();
-    return result.result.data[0];
-  }
-}
+def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Calculate cosine similarity between two embeddings."""
+    a_arr = np.array(a)
+    b_arr = np.array(b)
+    return float(np.dot(a_arr, b_arr) / (np.linalg.norm(a_arr) * np.linalg.norm(b_arr)))
 ```
 
-## Cloudflare Vectorize
+### Document Chunking
 
-### Index Configuration
+```python
+# src/services/chunker.py
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+import re
 
-```typescript
-// scripts/setup-vectorize.ts
-import { Vectorize } from "@cloudflare/workers-types";
+@dataclass
+class DocumentChunk:
+    """A chunk of a document with metadata."""
+    document_path: str
+    chunk_index: int
+    content: str
+    metadata: Dict[str, Any]
 
-// Create index via wrangler CLI:
-// wrangler vectorize create ttai-knowledge --dimensions 768 --metric cosine
+class DocumentChunker:
+    """
+    Splits documents into chunks for embedding.
 
-interface ChunkMetadata {
-  path: string;
-  title: string;
-  category: string;
-  chunk: string;
-  chunkIndex: number;
-  totalChunks: number;
-}
+    Uses semantic chunking based on markdown headers
+    with a fallback to fixed-size chunks.
+    """
+
+    def __init__(
+        self,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200
+    ):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
+    def chunk_document(
+        self,
+        content: str,
+        document_path: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> List[DocumentChunk]:
+        """
+        Split a document into chunks.
+
+        Strategy:
+        1. Try to split on markdown headers (semantic boundaries)
+        2. If chunks are too large, split on paragraphs
+        3. If still too large, use fixed-size splitting
+        """
+        metadata = metadata or {}
+        chunks = []
+
+        # Try semantic chunking first (by headers)
+        sections = self._split_by_headers(content)
+
+        chunk_index = 0
+        for section in sections:
+            if len(section) <= self.chunk_size:
+                chunks.append(DocumentChunk(
+                    document_path=document_path,
+                    chunk_index=chunk_index,
+                    content=section.strip(),
+                    metadata=metadata
+                ))
+                chunk_index += 1
+            else:
+                # Section too large, split by paragraphs
+                paragraphs = section.split('\n\n')
+                current_chunk = ""
+
+                for para in paragraphs:
+                    if len(current_chunk) + len(para) <= self.chunk_size:
+                        current_chunk += para + "\n\n"
+                    else:
+                        if current_chunk:
+                            chunks.append(DocumentChunk(
+                                document_path=document_path,
+                                chunk_index=chunk_index,
+                                content=current_chunk.strip(),
+                                metadata=metadata
+                            ))
+                            chunk_index += 1
+                        current_chunk = para + "\n\n"
+
+                if current_chunk.strip():
+                    chunks.append(DocumentChunk(
+                        document_path=document_path,
+                        chunk_index=chunk_index,
+                        content=current_chunk.strip(),
+                        metadata=metadata
+                    ))
+                    chunk_index += 1
+
+        return chunks
+
+    def _split_by_headers(self, content: str) -> List[str]:
+        """Split content by markdown headers."""
+        # Match ## and ### headers
+        pattern = r'\n(?=#{2,3}\s)'
+        sections = re.split(pattern, content)
+        return [s for s in sections if s.strip()]
 ```
 
-### Document Indexing
+## Knowledge Service
 
-```typescript
-// src/services/indexer.ts
-export class DocumentIndexer {
-  constructor(
-    private r2: R2Bucket,
-    private vectorize: VectorizeIndex,
-    private ai: Ai
-  ) {}
+### Core Implementation
 
-  async indexAllDocuments(): Promise<IndexResult> {
-    const documents = await this.listAllDocuments();
-    let indexed = 0;
-    let chunks = 0;
+```python
+# src/services/knowledge.py
+import logging
+import yaml
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 
-    for (const docPath of documents) {
-      const result = await this.indexDocument(docPath);
-      indexed++;
-      chunks += result.chunkCount;
-    }
+from .embeddings import generate_embedding, generate_embeddings_batch
+from .chunker import DocumentChunker, DocumentChunk
+from .database import DatabaseService
 
-    return { documentsIndexed: indexed, chunksCreated: chunks };
-  }
+logger = logging.getLogger(__name__)
 
-  async indexDocument(path: string): Promise<{ chunkCount: number }> {
-    // Fetch document
-    const object = await this.r2.get(`knowledge/${path}`);
-    if (!object) throw new Error(`Document not found: ${path}`);
+class KnowledgeService:
+    """
+    Manages the local knowledge base.
 
-    const content = await object.text();
-    const { frontmatter, body } = this.parseFrontmatter(content);
+    Provides:
+    - Document ingestion with chunking and embedding
+    - Semantic search across documents
+    - Direct document access for MCP resources
+    """
 
-    // Split into chunks (roughly 500 tokens each)
-    const chunks = this.splitIntoChunks(body, 500);
+    def __init__(self, db: DatabaseService, knowledge_dir: Path):
+        self.db = db
+        self.knowledge_dir = knowledge_dir
+        self.chunker = DocumentChunker()
 
-    // Generate embeddings for all chunks
-    const embeddings = await this.generateEmbeddings(chunks);
+    async def get_document(self, path: str) -> Optional[str]:
+        """
+        Get a document by path.
 
-    // Upsert to Vectorize
-    const vectors = chunks.map((chunk, i) => ({
-      id: `${path}#${i}`,
-      values: embeddings[i],
-      metadata: {
-        path,
-        title: frontmatter.title || path,
-        category: frontmatter.category || "uncategorized",
-        chunk,
-        chunkIndex: i,
-        totalChunks: chunks.length,
-      },
-    }));
+        Args:
+            path: Relative path within knowledge directory (e.g., "options/strategies/csp.md")
 
-    await this.vectorize.upsert(vectors);
+        Returns:
+            Document content or None if not found
+        """
+        full_path = self.knowledge_dir / path
+        if not full_path.exists():
+            return None
 
-    return { chunkCount: chunks.length };
-  }
+        return full_path.read_text()
 
-  private splitIntoChunks(text: string, targetTokens: number): string[] {
-    const chunks: string[] = [];
-    const paragraphs = text.split(/\n\n+/);
+    async def search(
+        self,
+        query: str,
+        limit: int = 5,
+        category: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search knowledge base using semantic similarity.
 
-    let currentChunk = "";
-    let currentTokens = 0;
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            category: Optional category filter (e.g., "options/strategies")
 
-    for (const paragraph of paragraphs) {
-      const paragraphTokens = this.estimateTokens(paragraph);
+        Returns:
+            List of matching chunks with similarity scores
+        """
+        # Generate query embedding
+        query_embedding = generate_embedding(query)
 
-      if (currentTokens + paragraphTokens > targetTokens && currentChunk) {
-        chunks.push(currentChunk.trim());
-        currentChunk = "";
-        currentTokens = 0;
-      }
+        # Search using sqlite-vec
+        results = await self._vector_search(
+            query_embedding,
+            limit=limit,
+            category=category
+        )
 
-      currentChunk += paragraph + "\n\n";
-      currentTokens += paragraphTokens;
-    }
+        return results
 
-    if (currentChunk.trim()) {
-      chunks.push(currentChunk.trim());
-    }
+    async def _vector_search(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        category: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Perform vector similarity search."""
+        # Convert embedding to bytes for sqlite-vec
+        import struct
+        embedding_bytes = struct.pack(f'{len(query_embedding)}f', *query_embedding)
 
-    return chunks;
-  }
+        # Build query
+        sql = """
+            SELECT
+                c.id,
+                c.document_path,
+                c.chunk_index,
+                c.content,
+                c.metadata,
+                vec_distance_cosine(e.embedding, ?) as distance
+            FROM knowledge_chunks c
+            JOIN knowledge_embeddings e ON e.chunk_id = c.id
+        """
+        params = [embedding_bytes]
 
-  private estimateTokens(text: string): number {
-    // Rough estimate: ~4 characters per token
-    return Math.ceil(text.length / 4);
-  }
+        if category:
+            sql += " WHERE c.document_path LIKE ?"
+            params.append(f"{category}%")
 
-  private async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    // Batch embedding generation with Workers AI
-    const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
-      text: texts,
-    });
+        sql += " ORDER BY distance ASC LIMIT ?"
+        params.append(limit)
 
-    return response.data;
-  }
+        cursor = await self.db._connection.execute(sql, params)
+        rows = await cursor.fetchall()
 
-  private async listAllDocuments(): Promise<string[]> {
-    const listed = await this.r2.list({ prefix: "knowledge/" });
-    return listed.objects
-      .filter((obj) => obj.key.endsWith(".md"))
-      .map((obj) => obj.key.replace("knowledge/", ""));
-  }
+        results = []
+        for row in rows:
+            results.append({
+                "chunk_id": row["id"],
+                "document_path": row["document_path"],
+                "chunk_index": row["chunk_index"],
+                "content": row["content"],
+                "metadata": yaml.safe_load(row["metadata"]) if row["metadata"] else {},
+                "similarity": 1 - row["distance"],  # Convert distance to similarity
+            })
 
-  private parseFrontmatter(content: string): {
-    frontmatter: Record<string, any>;
-    body: string;
-  } {
-    const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-    if (!match) return { frontmatter: {}, body: content };
+        return results
 
-    const frontmatter: Record<string, any> = {};
-    match[1].split("\n").forEach((line) => {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const key = line.substring(0, colonIndex).trim();
-        const value = line.substring(colonIndex + 1).trim();
-        frontmatter[key] = value;
-      }
-    });
+    async def index_document(self, path: str) -> int:
+        """
+        Index a document into the knowledge base.
 
-    return { frontmatter, body: match[2] };
-  }
-}
+        Args:
+            path: Relative path to document
+
+        Returns:
+            Number of chunks indexed
+        """
+        full_path = self.knowledge_dir / path
+
+        if not full_path.exists():
+            raise FileNotFoundError(f"Document not found: {path}")
+
+        content = full_path.read_text()
+
+        # Parse frontmatter if present
+        metadata = {}
+        if content.startswith('---'):
+            parts = content.split('---', 2)
+            if len(parts) >= 3:
+                metadata = yaml.safe_load(parts[1])
+                content = parts[2]
+
+        metadata['indexed_at'] = datetime.now().isoformat()
+        metadata['source_path'] = path
+
+        # Chunk the document
+        chunks = self.chunker.chunk_document(content, path, metadata)
+
+        # Generate embeddings for all chunks
+        chunk_texts = [c.content for c in chunks]
+        embeddings = generate_embeddings_batch(chunk_texts)
+
+        # Store chunks and embeddings
+        for chunk, embedding in zip(chunks, embeddings):
+            await self._store_chunk(chunk, embedding)
+
+        logger.info(f"Indexed {len(chunks)} chunks from {path}")
+        return len(chunks)
+
+    async def _store_chunk(
+        self,
+        chunk: DocumentChunk,
+        embedding: List[float]
+    ) -> int:
+        """Store a chunk and its embedding."""
+        import struct
+        import json
+
+        # Insert chunk
+        cursor = await self.db._connection.execute("""
+            INSERT INTO knowledge_chunks (document_path, chunk_index, content, metadata)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(document_path, chunk_index) DO UPDATE SET
+                content = excluded.content,
+                metadata = excluded.metadata
+        """, (
+            chunk.document_path,
+            chunk.chunk_index,
+            chunk.content,
+            json.dumps(chunk.metadata)
+        ))
+
+        chunk_id = cursor.lastrowid
+
+        # Insert embedding
+        embedding_bytes = struct.pack(f'{len(embedding)}f', *embedding)
+
+        await self.db._connection.execute("""
+            INSERT INTO knowledge_embeddings (chunk_id, embedding)
+            VALUES (?, ?)
+            ON CONFLICT(chunk_id) DO UPDATE SET
+                embedding = excluded.embedding
+        """, (chunk_id, embedding_bytes))
+
+        await self.db._connection.commit()
+        return chunk_id
+
+    async def index_all(self) -> Dict[str, int]:
+        """Index all documents in the knowledge directory."""
+        results = {}
+
+        for md_file in self.knowledge_dir.rglob("*.md"):
+            relative_path = str(md_file.relative_to(self.knowledge_dir))
+            try:
+                count = await self.index_document(relative_path)
+                results[relative_path] = count
+            except Exception as e:
+                logger.error(f"Failed to index {relative_path}: {e}")
+                results[relative_path] = 0
+
+        return results
+
+    async def delete_document(self, path: str) -> bool:
+        """Remove a document and its chunks from the index."""
+        # Delete embeddings first (foreign key)
+        await self.db._connection.execute("""
+            DELETE FROM knowledge_embeddings
+            WHERE chunk_id IN (
+                SELECT id FROM knowledge_chunks WHERE document_path = ?
+            )
+        """, (path,))
+
+        # Delete chunks
+        cursor = await self.db._connection.execute(
+            "DELETE FROM knowledge_chunks WHERE document_path = ?",
+            (path,)
+        )
+        await self.db._connection.commit()
+
+        return cursor.rowcount > 0
 ```
 
-## MCP Resource Access
+## MCP Resource Integration
 
 ### Knowledge Resources
 
-```typescript
-// src/server/resources.ts
-export function registerKnowledgeResources(
-  server: McpServer,
-  services: Services
-): void {
-  const knowledge = new KnowledgeService(services.r2, services.vectorize);
+```python
+# src/server/resources.py (knowledge section)
+from mcp.server import Server
+from mcp.types import Resource
 
-  // Static document access
-  server.resource(
-    "knowledge://options/strategies/{strategy}",
-    "Options strategy documentation",
-    async (uri) => {
-      const strategy = uri.pathname.split("/").pop();
-      const doc = await knowledge.getDocument(`options/strategies/${strategy}.md`);
+def register_knowledge_resources(
+    server: Server,
+    knowledge: "KnowledgeService"
+) -> None:
+    """Register knowledge base resources."""
 
-      if (!doc) {
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              mimeType: "text/plain",
-              text: `Strategy not found: ${strategy}`,
-            },
-          ],
-        };
-      }
+    @server.resource("knowledge://options/strategies/{strategy}")
+    async def get_strategy_doc(strategy: str) -> str:
+        """Get options strategy documentation."""
+        path = f"options/strategies/{strategy}.md"
+        doc = await knowledge.get_document(path)
+        return doc or f"Strategy not found: {strategy}"
 
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "text/markdown",
-            text: doc.content,
-          },
-        ],
-      };
-    }
-  );
+    @server.resource("knowledge://trading/{topic}")
+    async def get_trading_doc(topic: str) -> str:
+        """Get trading topic documentation."""
+        path = f"trading/{topic}.md"
+        doc = await knowledge.get_document(path)
+        return doc or f"Topic not found: {topic}"
 
-  // Document listing
-  server.resource(
-    "knowledge://list/{category}",
-    "List documents in a category",
-    async (uri) => {
-      const category = uri.pathname.replace("/list/", "");
-      const documents = await knowledge.listDocuments(category);
+    @server.resource("knowledge://search")
+    async def search_knowledge(query: str) -> str:
+        """Search the knowledge base."""
+        import json
+        results = await knowledge.search(query, limit=5)
+        return json.dumps(results, indent=2)
 
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "application/json",
-            text: JSON.stringify(documents, null, 2),
-          },
-        ],
-      };
-    }
-  );
-
-  // Semantic search tool
-  server.tool(
-    "search_knowledge",
-    "Search the knowledge base for relevant information",
-    {
-      query: z.string().describe("Search query"),
-      limit: z.number().optional().default(5).describe("Max results"),
-    },
-    async ({ query, limit }) => {
-      const results = await knowledge.searchDocuments(query, limit);
-
-      const formatted = results.map((r) => ({
-        title: r.document?.title,
-        path: r.document?.path,
-        score: r.score,
-        excerpt: r.chunk.substring(0, 200) + "...",
-      }));
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formatted, null, 2),
-          },
-        ],
-      };
-    }
-  );
-}
+    @server.list_resources()
+    async def list_knowledge_resources() -> list[Resource]:
+        """List available knowledge resources."""
+        return [
+            Resource(
+                uri="knowledge://options/strategies/csp",
+                name="Cash-Secured Put Strategy",
+                description="Guide to selling cash-secured puts",
+                mimeType="text/markdown"
+            ),
+            Resource(
+                uri="knowledge://options/strategies/covered_call",
+                name="Covered Call Strategy",
+                description="Guide to selling covered calls",
+                mimeType="text/markdown"
+            ),
+            Resource(
+                uri="knowledge://trading/risk-management",
+                name="Risk Management",
+                description="Position sizing and risk rules",
+                mimeType="text/markdown"
+            ),
+        ]
 ```
 
-### Resource Templates
+## Search Tool
 
-```typescript
-// src/server/resourceTemplates.ts
-export function registerResourceTemplates(server: McpServer): void {
-  // Options strategies
-  server.resourceTemplate(
-    "knowledge://options/strategies/{strategy}",
-    "Options strategy documentation",
-    {
-      strategy: {
-        type: "string",
-        description: "Strategy name (e.g., cash-secured-put, covered-call)",
-      },
-    }
-  );
+```python
+# src/server/tools.py (search_knowledge tool)
 
-  // Greeks
-  server.resourceTemplate(
-    "knowledge://options/greeks/{greek}",
-    "Option greek documentation",
-    {
-      greek: {
-        type: "string",
-        description: "Greek name (delta, gamma, theta, vega, rho)",
-      },
-    }
-  );
+@server.tool()
+async def search_knowledge(
+    query: str,
+    limit: int = 5,
+    category: str | None = None
+) -> list[TextContent]:
+    """
+    Search the knowledge base for relevant information.
 
-  // Trading concepts
-  server.resourceTemplate(
-    "knowledge://trading/{topic}",
-    "Trading concept documentation",
-    {
-      topic: {
-        type: "string",
-        description: "Topic (risk-management, position-sizing, etc.)",
-      },
-    }
-  );
-}
+    Args:
+        query: Natural language search query
+        limit: Maximum number of results (default 5)
+        category: Optional category filter (e.g., "options/strategies")
+
+    Returns:
+        Relevant knowledge chunks with similarity scores
+    """
+    results = await knowledge.search(query, limit=limit, category=category)
+
+    # Format results
+    formatted = []
+    for r in results:
+        formatted.append({
+            "path": r["document_path"],
+            "content": r["content"][:500] + "..." if len(r["content"]) > 500 else r["content"],
+            "similarity": round(r["similarity"], 3),
+        })
+
+    return [TextContent(
+        type="text",
+        text=json.dumps(formatted, indent=2)
+    )]
 ```
 
-## Embedding Generation
+## Sample Documents
 
-### Workers AI Integration
+### Cash-Secured Put Guide
 
-```typescript
-// src/services/embeddings.ts
-export class EmbeddingService {
-  constructor(private ai: Ai) {}
+```markdown
+---
+title: Cash-Secured Put Strategy
+category: options/strategies
+tags: [csp, put-selling, income, premium]
+difficulty: beginner
+---
 
-  async generateEmbedding(text: string): Promise<number[]> {
-    const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
-      text: [text],
-    });
+# Cash-Secured Put (CSP) Strategy
 
-    return response.data[0];
-  }
+## What is a Cash-Secured Put?
 
-  async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    // Batch up to 100 texts at a time
-    const batchSize = 100;
-    const embeddings: number[][] = [];
+A cash-secured put is an options strategy where you:
+1. Sell a put option on a stock you want to own
+2. Hold enough cash to buy 100 shares if assigned
+3. Collect premium regardless of outcome
 
-    for (let i = 0; i < texts.length; i += batchSize) {
-      const batch = texts.slice(i, i + batchSize);
-      const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
-        text: batch,
-      });
-      embeddings.push(...response.data);
-    }
+## Entry Criteria
 
-    return embeddings;
-  }
-}
-```
+- **Stock Selection**: Quality stocks you want to own long-term
+- **Strike Selection**: At or below support levels (20-30 delta)
+- **Expiration**: 30-45 DTE for optimal theta decay
+- **Premium Target**: >1% of strike price per month
 
-### External Embedding Provider (Optional)
+## Example Trade
 
-```typescript
-// src/services/externalEmbeddings.ts
-import { OpenAI } from "openai";
+Stock: AAPL trading at $180
+- Sell 1 AAPL $170 Put @ $3.00 (45 DTE)
+- Cash Required: $17,000 ($170 x 100)
+- Premium Collected: $300
+- Return if expires worthless: 1.76% in 45 days (14.3% annualized)
+- Break-even: $167
 
-export class OpenAIEmbeddingService {
-  private client: OpenAI;
+## Risk Management
 
-  constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
-  }
+- Only sell puts on stocks you want to own
+- Keep position size to 2-5% of portfolio per underlying
+- Have a plan if stock drops significantly
 
-  async generateEmbedding(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
-      model: "text-embedding-ada-002",
-      input: text,
-    });
+## When to Roll
 
-    return response.data[0].embedding;
-  }
-
-  async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    const response = await this.client.embeddings.create({
-      model: "text-embedding-ada-002",
-      input: texts,
-    });
-
-    return response.data.map((d) => d.embedding);
-  }
-}
-```
-
-## wrangler.toml Configuration
-
-```toml
-# wrangler.toml
-
-# R2 bucket for document storage
-[[r2_buckets]]
-binding = "R2"
-bucket_name = "ttai-storage"
-
-# Vectorize index for semantic search
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "ttai-knowledge"
-
-# Workers AI for embeddings
-[ai]
-binding = "AI"
-```
-
-## Document Management CLI
-
-```typescript
-// scripts/manage-knowledge.ts
-import { program } from "commander";
-
-program
-  .command("upload <path>")
-  .description("Upload a document to the knowledge base")
-  .action(async (path) => {
-    // Upload to R2 and index
-  });
-
-program
-  .command("reindex")
-  .description("Reindex all documents")
-  .action(async () => {
-    const indexer = new DocumentIndexer(r2, vectorize, ai);
-    const result = await indexer.indexAllDocuments();
-    console.log(`Indexed ${result.documentsIndexed} documents, ${result.chunksCreated} chunks`);
-  });
-
-program
-  .command("search <query>")
-  .description("Search the knowledge base")
-  .option("-l, --limit <number>", "Max results", "5")
-  .action(async (query, options) => {
-    const knowledge = new KnowledgeService(r2, vectorize);
-    const results = await knowledge.searchDocuments(query, parseInt(options.limit));
-    console.log(JSON.stringify(results, null, 2));
-  });
-
-program.parse();
+- Stock approaching strike with >7 DTE remaining
+- Roll down and out for credit if possible
+- Take assignment if stock is oversold at good value
 ```
 
 ## Cross-References
 
+- [AI Agent System](./04-ai-agent-system.md) - Agents use knowledge for research
+- [Data Layer](./05-data-layer.md) - Chunk and embedding storage
 - [MCP Server Design](./01-mcp-server-design.md) - Resource registration
-- [Data Layer](./05-data-layer.md) - R2 storage patterns
-- [AI Agent System](./04-ai-agent-system.md) - Agent knowledge access
-- [Infrastructure](./08-infrastructure.md) - Vectorize configuration
