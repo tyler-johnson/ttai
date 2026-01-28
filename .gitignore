@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# Build
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

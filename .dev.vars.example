@@ -1,0 +1,8 @@
+# Copy to .dev.vars and fill in values
+
+# TastyTrade OAuth credentials
+TT_CLIENT_SECRET=your-client-secret
+TT_REFRESH_TOKEN=your-refresh-token
+
+# Future use
+# ANTHROPIC_API_KEY=
