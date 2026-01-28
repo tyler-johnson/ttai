@@ -14,21 +14,35 @@ from starlette.responses import Response
 from starlette.routing import Route
 import uvicorn
 
+from src.auth.credentials import CredentialManager
 from src.server.config import ServerConfig, config
 from src.server.tools import register_tools
+from src.services.cache import CacheService
+from src.services.tastytrade import TastyTradeService
 from src.utils.logging import setup_logging
 
 logger = logging.getLogger("ttai.server")
 
 
-def create_server() -> Server:
+def create_server(cfg: ServerConfig) -> Server:
     """Create and configure the MCP server.
+
+    Args:
+        cfg: Server configuration
 
     Returns:
         Configured MCP Server instance with tools registered
     """
     server = Server("ttai-server")
-    register_tools(server)
+
+    # Initialize services
+    credential_manager = CredentialManager(cfg.data_dir)
+    cache_service = CacheService()
+    tastytrade_service = TastyTradeService(credential_manager, cache_service)
+
+    # Register tools with services
+    register_tools(server, tastytrade_service)
+
     return server
 
 
@@ -174,8 +188,8 @@ def run() -> None:
 
     logger.info(f"TTAI Server starting with config: {cfg}")
 
-    # Create server
-    server = create_server()
+    # Create server with config
+    server = create_server(cfg)
 
     # Run in appropriate mode
     if cfg.transport == "sse":
