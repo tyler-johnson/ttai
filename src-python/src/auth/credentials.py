@@ -14,11 +14,10 @@ logger = logging.getLogger("ttai.auth")
 
 @dataclass
 class Credentials:
-    """Stored TastyTrade credentials."""
+    """Stored TastyTrade OAuth credentials."""
 
-    username: str
-    password: str
-    remember_token: str | None = None
+    client_secret: str
+    refresh_token: str
 
 
 class CredentialManager:
@@ -69,24 +68,21 @@ class CredentialManager:
 
     def store_credentials(
         self,
-        username: str,
-        password: str,
-        remember_token: str | None = None,
+        client_secret: str,
+        refresh_token: str,
     ) -> None:
-        """Store credentials encrypted on disk.
+        """Store OAuth credentials encrypted on disk.
 
         Args:
-            username: TastyTrade username
-            password: TastyTrade password
-            remember_token: Optional remember token for session restore
+            client_secret: TastyTrade OAuth client secret
+            refresh_token: TastyTrade OAuth refresh token
         """
         self._ensure_data_dir()
         fernet = self._get_fernet()
 
         data = {
-            "username": username,
-            "password": password,
-            "remember_token": remember_token,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
         }
         encrypted = fernet.encrypt(json.dumps(data).encode())
         self._credentials_path.write_bytes(encrypted)
@@ -108,33 +104,12 @@ class CredentialManager:
             decrypted = fernet.decrypt(encrypted)
             data = json.loads(decrypted.decode())
             return Credentials(
-                username=data["username"],
-                password=data["password"],
-                remember_token=data.get("remember_token"),
+                client_secret=data["client_secret"],
+                refresh_token=data["refresh_token"],
             )
         except Exception as e:
             logger.error(f"Failed to load credentials: {e}")
             return None
-
-    def update_remember_token(self, remember_token: str) -> bool:
-        """Update the stored remember token.
-
-        Args:
-            remember_token: New remember token
-
-        Returns:
-            True if successful, False otherwise
-        """
-        credentials = self.load_credentials()
-        if credentials is None:
-            return False
-
-        self.store_credentials(
-            username=credentials.username,
-            password=credentials.password,
-            remember_token=remember_token,
-        )
-        return True
 
     def clear_credentials(self) -> None:
         """Remove stored credentials."""

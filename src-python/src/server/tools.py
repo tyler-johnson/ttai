@@ -34,17 +34,17 @@ def register_tools(server: Server, tastytrade_service: TastyTradeService) -> Non
             ),
             Tool(
                 name="login",
-                description="Authenticate with TastyTrade",
+                description="Authenticate with TastyTrade using OAuth credentials",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "username": {
+                        "client_secret": {
                             "type": "string",
-                            "description": "TastyTrade username",
+                            "description": "TastyTrade OAuth client secret",
                         },
-                        "password": {
+                        "refresh_token": {
                             "type": "string",
-                            "description": "TastyTrade password",
+                            "description": "TastyTrade OAuth refresh token",
                         },
                         "remember_me": {
                             "type": "boolean",
@@ -52,7 +52,7 @@ def register_tools(server: Server, tastytrade_service: TastyTradeService) -> Non
                             "default": False,
                         },
                     },
-                    "required": ["username", "password"],
+                    "required": ["client_secret", "refresh_token"],
                 },
             ),
             Tool(
@@ -112,16 +112,16 @@ def register_tools(server: Server, tastytrade_service: TastyTradeService) -> Non
             return [TextContent(type="text", text="pong")]
 
         if name == "login":
-            username = arguments["username"]
-            password = arguments["password"]
+            client_secret = arguments["client_secret"]
+            refresh_token = arguments["refresh_token"]
             remember_me = arguments.get("remember_me", False)
 
-            success = await tastytrade_service.login(username, password, remember_me)
+            success = await tastytrade_service.login(client_secret, refresh_token, remember_me)
 
             if success:
-                result = {"success": True, "message": f"Logged in as {username}"}
+                result = {"success": True, "message": "Successfully authenticated with TastyTrade"}
             else:
-                result = {"success": False, "message": "Login failed. Check credentials."}
+                result = {"success": False, "message": "Login failed. Check OAuth credentials."}
 
             return [TextContent(type="text", text=json.dumps(result))]
 

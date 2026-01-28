@@ -47,40 +47,30 @@ class TastyTradeService:
         """Check if we have an active session."""
         return self._session is not None
 
-    @property
-    def username(self) -> str | None:
-        """Get the current session username."""
-        if self._session is None:
-            return None
-        credentials = self._credential_manager.load_credentials()
-        return credentials.username if credentials else None
-
     async def login(
         self,
-        username: str,
-        password: str,
+        client_secret: str,
+        refresh_token: str,
         remember_me: bool = False,
     ) -> bool:
-        """Authenticate with TastyTrade.
+        """Authenticate with TastyTrade using OAuth.
 
         Args:
-            username: TastyTrade username
-            password: TastyTrade password
+            client_secret: TastyTrade OAuth client secret
+            refresh_token: TastyTrade OAuth refresh token
             remember_me: Whether to store credentials for session restore
 
         Returns:
             True if login successful, False otherwise
         """
         try:
-            self._session = Session(username, password, remember_me=remember_me)
-            logger.info(f"Successfully logged in as {username}")
+            self._session = Session(client_secret, refresh_token)
+            logger.info("Successfully authenticated with TastyTrade OAuth")
 
             if remember_me:
-                remember_token = self._session.remember_token
                 self._credential_manager.store_credentials(
-                    username=username,
-                    password=password,
-                    remember_token=remember_token,
+                    client_secret=client_secret,
+                    refresh_token=refresh_token,
                 )
 
             return True
@@ -99,22 +89,9 @@ class TastyTradeService:
         if credentials is None:
             return False
 
-        # Try remember token first
-        if credentials.remember_token:
-            try:
-                self._session = Session(
-                    credentials.username,
-                    remember_token=credentials.remember_token,
-                )
-                logger.info(f"Session restored for {credentials.username} using remember token")
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to restore session with remember token: {e}")
-
-        # Fall back to username/password
         try:
-            self._session = Session(credentials.username, credentials.password)
-            logger.info(f"Session restored for {credentials.username} using password")
+            self._session = Session(credentials.client_secret, credentials.refresh_token)
+            logger.info("Session restored using stored OAuth credentials")
             return True
         except Exception as e:
             logger.error(f"Failed to restore session: {e}")
@@ -194,6 +171,5 @@ class TastyTradeService:
         """
         return {
             "authenticated": self.is_authenticated,
-            "username": self.username,
             "has_stored_credentials": self._credential_manager.has_credentials(),
         }

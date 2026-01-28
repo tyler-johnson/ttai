@@ -2,24 +2,27 @@
 
 import argparse
 import asyncio
+import contextlib
 import logging
-from typing import Literal
 
+import uvicorn
 from mcp.server import Server
-from mcp.server.sse import SseServerTransport
 from mcp.server.stdio import stdio_server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import Response
-from starlette.routing import Route
-import uvicorn
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 from src.auth.credentials import CredentialManager
-from src.server.config import ServerConfig, config
+from src.server.config import ServerConfig
 from src.server.tools import register_tools
 from src.services.cache import CacheService
 from src.services.tastytrade import TastyTradeService
 from src.utils.logging import setup_logging
+
+# Global reference to TastyTrade service for REST API
+_tastytrade_service: TastyTradeService | None = None
 
 logger = logging.getLogger("ttai.server")
 
@@ -33,6 +36,8 @@ def create_server(cfg: ServerConfig) -> Server:
     Returns:
         Configured MCP Server instance with tools registered
     """
+    global _tastytrade_service
+
     server = Server("ttai-server")
 
     # Initialize services
@@ -40,10 +45,70 @@ def create_server(cfg: ServerConfig) -> Server:
     cache_service = CacheService()
     tastytrade_service = TastyTradeService(credential_manager, cache_service)
 
+    # Store global reference for REST API
+    _tastytrade_service = tastytrade_service
+
     # Register tools with services
     register_tools(server, tastytrade_service)
 
     return server
+
+
+# REST API handlers for Tauri frontend
+async def handle_health(request: Request) -> JSONResponse:
+    """Health check endpoint."""
+    return JSONResponse({"status": "ok"})
+
+
+async def handle_auth_status(request: Request) -> JSONResponse:
+    """Get authentication status."""
+    if _tastytrade_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=500)
+
+    return JSONResponse(_tastytrade_service.get_auth_status())
+
+
+async def handle_login(request: Request) -> JSONResponse:
+    """Login to TastyTrade."""
+    if _tastytrade_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=500)
+
+    try:
+        body = await request.json()
+        client_secret = body.get("client_secret")
+        refresh_token = body.get("refresh_token")
+        remember_me = body.get("remember_me", True)
+
+        if not client_secret or not refresh_token:
+            return JSONResponse({
+                "success": False,
+                "error": "client_secret and refresh_token are required"
+            }, status_code=400)
+
+        success = await _tastytrade_service.login(client_secret, refresh_token, remember_me)
+        if success:
+            return JSONResponse({"success": True})
+        else:
+            return JSONResponse({"success": False, "error": "Login failed"})
+    except Exception as e:
+        logger.exception("Login failed")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+async def handle_logout(request: Request) -> JSONResponse:
+    """Logout from TastyTrade."""
+    if _tastytrade_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=500)
+
+    try:
+        body = await request.json()
+        clear_credentials = body.get("clear_credentials", False)
+
+        await _tastytrade_service.logout(clear_credentials)
+        return JSONResponse({"success": True})
+    except Exception as e:
+        logger.exception("Logout failed")
+        return JSONResponse({"success": False, "error": str(e)})
 
 
 async def run_stdio(server: Server) -> None:
@@ -70,34 +135,31 @@ async def run_sse(server: Server, host: str, port: int) -> None:
         host: Host to bind to
         port: Port to bind to
     """
-    sse_transport = SseServerTransport("/messages/")
+    session_manager = StreamableHTTPSessionManager(app=server)
 
-    async def handle_sse(request: Request) -> Response:
-        """Handle SSE connection requests."""
-        async with sse_transport.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await server.run(
-                streams[0],
-                streams[1],
-                server.create_initialization_options(),
-            )
-        return Response()
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
+        async with session_manager.run():
+            yield
 
-    async def handle_messages(request: Request) -> Response:
-        """Handle incoming messages."""
-        return await sse_transport.handle_post_message(
-            request.scope, request.receive, request._send
-        )
+    # Create an ASGI app wrapper for the MCP endpoint
+    async def mcp_asgi_app(scope, receive, send):
+        await session_manager.handle_request(scope, receive, send)
 
     app = Starlette(
+        lifespan=lifespan,
         routes=[
-            Route("/sse", endpoint=handle_sse),
-            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+            # MCP streamable HTTP transport at /mcp
+            Mount("/mcp", app=mcp_asgi_app),
+            # REST API for Tauri frontend
+            Route("/api/health", endpoint=handle_health),
+            Route("/api/auth-status", endpoint=handle_auth_status),
+            Route("/api/login", endpoint=handle_login, methods=["POST"]),
+            Route("/api/logout", endpoint=handle_logout, methods=["POST"]),
         ],
     )
 
-    logger.info(f"Starting MCP server in SSE mode at http://{host}:{port}/sse")
+    logger.info(f"Starting MCP server in HTTP mode at http://{host}:{port}/mcp")
 
     uvicorn_config = uvicorn.Config(
         app,
