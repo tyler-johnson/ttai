@@ -13,15 +13,19 @@ async def on_fetch(request, env):
 
     # Health check
     if path == "/health":
+        # Check for access token in header (per-user auth) or env vars (legacy)
+        has_header_auth = bool(request.headers.get("X-TT-Access-Token"))
+        has_env_auth = bool(
+            getattr(env, "TT_CLIENT_SECRET", None) and
+            getattr(env, "TT_REFRESH_TOKEN", None)
+        )
         return Response.json(
             {
                 "status": "healthy",
                 "service": "ttai-python-worker",
                 "environment": getattr(env, "ENVIRONMENT", "unknown"),
-                "has_credentials": bool(
-                    getattr(env, "TT_CLIENT_SECRET", None) and
-                    getattr(env, "TT_REFRESH_TOKEN", None)
-                ),
+                "has_credentials": has_header_auth or has_env_auth,
+                "auth_mode": "per_user" if has_header_auth else ("legacy" if has_env_auth else "none"),
             }
         )
 
@@ -50,18 +54,24 @@ async def on_fetch(request, env):
             if isinstance(symbols, str):
                 symbols = [symbols]
 
-            # Get credentials from environment
-            client_secret = getattr(env, "TT_CLIENT_SECRET", None)
-            refresh_token = getattr(env, "TT_REFRESH_TOKEN", None)
+            # Check for per-user access token in header (preferred)
+            access_token = request.headers.get("X-TT-Access-Token")
 
-            if not client_secret or not refresh_token:
-                return Response.json(
-                    {"error": "TastyTrade credentials not configured"},
-                    status=500,
-                )
+            if access_token:
+                # Per-user authentication: use pre-fetched access token
+                client = TastyTradeClient.from_access_token(access_token)
+            else:
+                # Legacy authentication: use environment variables
+                client_secret = getattr(env, "TT_CLIENT_SECRET", None)
+                refresh_token = getattr(env, "TT_REFRESH_TOKEN", None)
 
-            # Create client and fetch quotes
-            client = TastyTradeClient(client_secret, refresh_token)
+                if not client_secret or not refresh_token:
+                    return Response.json(
+                        {"error": "TastyTrade credentials not configured. Please authenticate."},
+                        status=401,
+                    )
+
+                client = TastyTradeClient(client_secret, refresh_token)
 
             # For single symbol, use get_quote for cleaner response
             if len(symbols) == 1:

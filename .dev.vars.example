@@ -1,8 +1,28 @@
 # Copy to .dev.vars and fill in values
 
-# TastyTrade OAuth credentials
-TT_CLIENT_SECRET=your-client-secret
-TT_REFRESH_TOKEN=your-refresh-token
+# =============================================================================
+# Legacy authentication (optional - for backward compatibility)
+# =============================================================================
+# TT_CLIENT_SECRET=your-client-secret
+# TT_REFRESH_TOKEN=your-refresh-token
 
+# =============================================================================
+# Per-user OAuth authentication (recommended)
+# =============================================================================
+
+# TastyTrade OAuth application credentials
+TT_CLIENT_ID=your-tastytrade-client-id
+TT_CLIENT_SECRET=your-tastytrade-client-secret
+
+# JWT session signing secret (at least 32 characters)
+# Generate with: openssl rand -hex 32
+JWT_SECRET=your-jwt-secret-at-least-32-characters-long
+
+# Token encryption key (base64-encoded 32-byte key for AES-256)
+# Generate with: openssl rand -base64 32
+TOKEN_ENCRYPTION_KEY=your-base64-encoded-32-byte-key
+
+# =============================================================================
 # Future use
+# =============================================================================
 # ANTHROPIC_API_KEY=

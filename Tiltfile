@@ -1,6 +1,20 @@
 # TTAI Local Development
 # Run with: tilt up
 
+# D1 Database migrations - run before workers start
+# Wrangler tracks applied migrations, only runs new ones
+# Uses mcp-server config so migrations apply to same DB the workers use
+local_resource(
+    'db-migrate',
+    cmd='npx wrangler d1 migrations apply ttai --local -c workers/mcp-server/wrangler.toml',
+    deps=[
+        'migrations',
+        'workers/mcp-server/wrangler.toml',
+    ],
+    labels=['db'],
+    allow_parallel=True,
+)
+
 # Combined workers - MCP server is primary, Python worker accessible via service binding
 # Using multiple -c flags runs workers together so service bindings work natively
 local_resource(
@@ -14,6 +28,7 @@ local_resource(
         'workers/python-worker/wrangler.toml',
         'workers/python-worker/cf-requirements.txt',
     ],
+    resource_deps=['db-migrate'],
     labels=['workers'],
     readiness_probe=probe(
         http_get=http_get_action(port=8787, path='/health'),

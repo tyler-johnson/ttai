@@ -24,9 +24,32 @@ class TastyTradeClient:
         self.refresh_token = refresh_token
         self._access_token: str | None = None
 
+    @classmethod
+    def from_access_token(cls, access_token: str) -> "TastyTradeClient":
+        """
+        Create a client with a pre-fetched access token.
+
+        This is used for per-user authentication where the MCP server
+        has already obtained and refreshed the access token.
+
+        Args:
+            access_token: Valid TastyTrade access token
+
+        Returns:
+            TastyTradeClient instance with the token pre-set
+        """
+        # Create instance without credentials (won't be used)
+        instance = cls.__new__(cls)
+        instance.client_secret = None
+        instance.refresh_token = None
+        instance._access_token = access_token
+        return instance
+
     async def _ensure_authenticated(self) -> str:
         """Get or refresh the access token."""
         if self._access_token is None:
+            if not self.client_secret or not self.refresh_token:
+                raise ValueError("No access token or credentials available")
             self._access_token = await get_access_token(
                 self.client_secret, self.refresh_token
             )

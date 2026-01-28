@@ -11,6 +11,7 @@ Client (Claude) → MCP Server (TypeScript) → Python Worker → TastyTrade API
 - **MCP Server** (`workers/mcp-server/`): TypeScript Cloudflare Worker handling MCP protocol
 - **Python Worker** (`workers/python-worker/`): Python Cloudflare Worker calling TastyTrade REST API
 - **Service Binding**: Workers communicate via Cloudflare service bindings (no HTTP overhead in production)
+- **Shared Storage**: Both workers access the same D1 database, KV namespace, and R2 bucket
 
 ## Quick Start
 
@@ -38,7 +39,13 @@ curl http://localhost:8787/health
 ttai/
 ├── workers/
 │   ├── mcp-server/           # TypeScript MCP server
-│   │   ├── src/index.ts      # Entry point, MCP tool registration
+│   │   ├── src/
+│   │   │   ├── index.ts      # Entry point, MCP tool registration
+│   │   │   └── auth/         # Authentication module
+│   │   │       ├── oauth.ts      # OAuth handlers
+│   │   │       ├── jwt.ts        # JWT utilities
+│   │   │       ├── encryption.ts # Token encryption
+│   │   │       └── middleware.ts # Auth middleware
 │   │   └── wrangler.toml     # Cloudflare Worker config
 │   │
 │   └── python-worker/        # Python worker for TastyTrade API
@@ -50,6 +57,8 @@ ttai/
 │       ├── cf-requirements.txt
 │       └── wrangler.toml
 │
+├── migrations/               # D1 database migrations (shared)
+│   └── 0001_initial_schema.sql
 ├── docs/architecture/        # Detailed architecture documentation
 ├── Tiltfile                  # Local development orchestration
 ├── .dev.vars                 # Local secrets (gitignored)
@@ -108,18 +117,99 @@ TT_REFRESH_TOKEN=your-refresh-token
 
 Symlinks in each worker directory point to the root `.dev.vars`.
 
+## Authentication
+
+### Per-User OAuth (Recommended)
+
+Users authenticate with their own TastyTrade credentials via browser-based OAuth:
+
+```
+User → /oauth/authorize → TastyTrade Login → /oauth/callback → JWT Session
+```
+
+**Flow:**
+1. Client visits `/.well-known/oauth-authorization-server` for discovery
+2. Client redirects to `/oauth/authorize?redirect_uri=...`
+3. User logs in at TastyTrade
+4. TastyTrade redirects to `/oauth/callback` with auth code
+5. Server exchanges code for tokens, stores encrypted in D1
+6. Server returns JWT session token to client
+
+**Required secrets for per-user auth:**
+```bash
+TT_CLIENT_ID=your-tastytrade-app-client-id
+TT_CLIENT_SECRET=your-tastytrade-app-client-secret
+JWT_SECRET=your-jwt-signing-secret-32-chars-min
+TOKEN_ENCRYPTION_KEY=base64-encoded-32-byte-key
+```
+
+### Legacy Authentication
+
+For backward compatibility, shared credentials can still be used:
+
+```bash
+TT_CLIENT_SECRET=your-client-secret
+TT_REFRESH_TOKEN=your-refresh-token
+```
+
+### Database Setup
+
+Create D1 database:
+
+```bash
+# Create database (production)
+wrangler d1 create ttai
+
+# Update BOTH wrangler.toml files with database_id:
+# - workers/mcp-server/wrangler.toml
+# - workers/python-worker/wrangler.toml
+
+# Run migrations (local) - done automatically by Tilt
+wrangler d1 migrations apply ttai --local -c workers/mcp-server/wrangler.toml
+
+# Run migrations (production)
+wrangler d1 migrations apply ttai -c workers/mcp-server/wrangler.toml
+```
+
+### Creating New Migrations
+
+```bash
+# Create a new migration file
+wrangler d1 migrations create ttai add_new_feature -c workers/mcp-server/wrangler.toml
+
+# Edit the generated file in migrations/
+
+# Apply locally
+wrangler d1 migrations apply ttai --local -c workers/mcp-server/wrangler.toml
+```
+
+## Storage
+
+Both workers share access to the same storage resources:
+
+| Binding | Service | Purpose |
+|---------|---------|---------|
+| `DB` | D1 (SQLite) | Users, tokens, positions, analysis history, alerts |
+| `KV` | KV Namespace | Quote cache (30-60s), chain cache (5-15m), session cache |
+| `R2` | R2 Bucket | Knowledge base docs, user exports |
+
+### KV Key Patterns
+
+- Global: `quote:{symbol}`, `chain:{symbol}:{expiration}`
+- User-scoped: `user:{user_id}:analysis:{symbol}`, `user:{user_id}:session`
+
+### R2 Path Patterns
+
+- Shared: `knowledge/options/strategies.md`, `knowledge/trading/risk.md`
+- User-isolated: `users/{user_id}/exports/report.pdf`
+
 ## TastyTrade API
-
-### Authentication
-
-Uses OAuth with client_secret + refresh_token:
-- **Endpoint**: `POST https://api.tastyworks.com/oauth/token`
-- **Grant type**: `refresh_token`
-- **Access tokens**: Expire in 900 seconds (15 minutes)
 
 ### Endpoints Used
 
-- `/oauth/token` - Token refresh
+- `/oauth/authorize` - Start OAuth flow
+- `/oauth/token` - Token exchange and refresh
+- `/customers/me` - Get user info
 - `/market-data/by-type` - Bid/ask/last prices
 - `/market-metrics` - IV rank, beta, earnings dates
 
@@ -131,9 +221,13 @@ The `tastytrade` Python package uses WebSocket streaming which isn't supported i
 
 | Path | Method | Description |
 |------|--------|-------------|
-| `/` | POST | MCP protocol (tools/call, etc.) |
+| `/` | POST | MCP protocol (tools/call, etc.) - requires auth |
 | `/health` | GET | Health check |
 | `/debug/python-worker` | GET | Test Python worker connection |
+| `/.well-known/oauth-authorization-server` | GET | OAuth discovery metadata (RFC 8414) |
+| `/oauth/authorize` | GET | Start OAuth flow |
+| `/oauth/callback` | GET | OAuth callback from TastyTrade |
+| `/oauth/token` | POST | Token endpoint |
 | HEAD | HEAD | Returns MCP-Protocol-Version header |
 
 ## Architecture Documentation
@@ -209,9 +303,17 @@ Requires `mcp-remote` for HTTP MCP servers:
 
 ## Common Issues
 
+### "Authentication required"
+
+Per-user auth is enabled. Either:
+1. Complete OAuth flow via `/oauth/authorize`
+2. Or for development, remove `JWT_SECRET` from `.dev.vars` to use legacy auth
+
 ### "Credentials not configured"
 
-Check that `.dev.vars` exists and has valid `TT_CLIENT_SECRET` and `TT_REFRESH_TOKEN`.
+Check that `.dev.vars` exists and has valid credentials:
+- For per-user auth: `TT_CLIENT_ID`, `TT_CLIENT_SECRET`, `JWT_SECRET`, `TOKEN_ENCRYPTION_KEY`
+- For legacy auth: `TT_CLIENT_SECRET`, `TT_REFRESH_TOKEN`
 
 ### Service binding errors
 

@@ -9,3 +9,42 @@ local_protocol = "http"
 
 [vars]
 ENVIRONMENT = "development"
+
+# D1 Database - shared with MCP server
+[[d1_databases]]
+binding = "DB"
+database_name = "ttai"
+database_id = "local"
+migrations_dir = "../../migrations"
+
+# KV Namespace - caching quotes, chains, analysis results
+[[kv_namespaces]]
+binding = "KV"
+id = "local"
+
+# R2 Bucket - knowledge base and user exports
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "ttai-storage"
+
+# =============================================================================
+# Production environment - deploy with: wrangler deploy --env production
+# =============================================================================
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+# Use same resource IDs as mcp-server (shared resources)
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ttai"
+database_id = "376c59ce-c63b-4ba1-9331-45e66587d2e2"
+migrations_dir = "../../migrations"
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "48b60a0e042149d790031647e4990c1f"
+
+[[env.production.r2_buckets]]
+binding = "R2"
+bucket_name = "ttai-storage"
