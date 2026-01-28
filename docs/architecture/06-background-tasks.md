@@ -1,1312 +1,774 @@
-# Background Task System
+# Background Tasks
 
 ## Overview
 
-The background task system handles continuous monitoring, scheduled operations, and alert delivery. All background tasks run as Temporal workflows for durability and observability.
+The TTAI background task system uses Cloudflare primitives for continuous monitoring, scheduled operations, and alert delivery. Durable Object alarms handle stateful monitoring tasks, Cron Triggers run scheduled operations, and Cloudflare Queues process async work.
 
-## Task Types
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Background Task System                         │
+│                     Cloudflare Edge Network                          │
 ├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Continuous Workflows              Scheduled Workflows              │
-│  ┌─────────────────────┐          ┌─────────────────────┐           │
-│  │ News Watcher        │          │ Morning CSP Scan    │           │
-│  │ (every 5 min)       │          │ (9:35 AM ET)        │           │
-│  └─────────────────────┘          └─────────────────────┘           │
-│  ┌─────────────────────┐          ┌─────────────────────┐           │
-│  │ Price Alerts        │          │ Afternoon Scan      │           │
-│  │ (every 10 sec)      │          │ (2:00 PM ET)        │           │
-│  └─────────────────────┘          └─────────────────────┘           │
-│  ┌─────────────────────┐          ┌─────────────────────┐           │
-│  │ Portfolio Monitor   │          │ Daily Report        │           │
-│  │ (every 1 min)       │          │ (4:30 PM ET)        │           │
-│  └─────────────────────┘          └─────────────────────┘           │
-│                                   ┌─────────────────────┐           │
-│                                   │ Weekly Summary      │           │
-│                                   │ (Friday 5:00 PM ET) │           │
-│                                   └─────────────────────┘           │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────┐           │
-│  │              Notification Router                     │           │
-│  │  Discord | Slack | Email | MCP Resources             │           │
-│  └──────────────────────────────────────────────────────┘           │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │              Durable Object Alarms (Continuous)                 │ │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                │ │
+│  │  │  Portfolio │  │   Price    │  │    News    │                │ │
+│  │  │  Monitor   │  │  Alerts    │  │  Watcher   │                │ │
+│  │  │ (60s loop) │  │ (30s loop) │  │(300s loop) │                │ │
+│  │  └────────────┘  └────────────┘  └────────────┘                │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │              Cron Triggers (Scheduled)                          │ │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                │ │
+│  │  │  Market    │  │   Hourly   │  │   Daily    │                │ │
+│  │  │Open/Close  │  │   Scan     │  │  Reports   │                │ │
+│  │  │ 9:30/4:00  │  │   :00      │  │  5:00 PM   │                │ │
+│  │  └────────────┘  └────────────┘  └────────────┘                │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │              Cloudflare Queues (Async Processing)               │ │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                │ │
+│  │  │ Analysis   │  │ Notifica-  │  │  Screener  │                │ │
+│  │  │  Results   │  │   tions    │  │  Results   │                │ │
+│  │  └────────────┘  └────────────┘  └────────────┘                │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Continuous Workflows
-
-### News Monitoring
-
-```python
-# workflows/background/news_watcher.py
-from datetime import timedelta
-from temporalio import workflow
-from dataclasses import dataclass, field
-from typing import Set, List
-
-with workflow.unsafe.imports_passed_through():
-    from activities.alerts import check_news_activity, route_alerts_activity
-
-@dataclass
-class NewsWatcherParams:
-    initial_symbols: List[str] = field(default_factory=list)
-    check_interval_minutes: int = 5
-    significance_threshold: float = 0.7
-
-@workflow.defn
-class NewsWatcherWorkflow:
-    """
-    Continuous workflow that monitors news for watched symbols.
-
-    Features:
-    - Dynamic symbol list via signals
-    - Configurable check interval
-    - Significance-based filtering
-    - Deduplication of already-seen articles
-    - Continue-as-new for history management
-    """
-
-    def __init__(self):
-        self._shutdown = False
-        self._symbols: Set[str] = set()
-        self._seen_articles: Set[str] = set()
-
-    @workflow.signal
-    async def update_symbols(self, symbols: List[str]) -> None:
-        """Update the list of symbols to monitor."""
-        self._symbols = set(symbols)
-        workflow.logger.info(f"Updated watchlist to {len(self._symbols)} symbols")
-
-    @workflow.signal
-    async def add_symbols(self, symbols: List[str]) -> None:
-        """Add symbols to the monitoring list."""
-        self._symbols.update(symbols)
-
-    @workflow.signal
-    async def remove_symbols(self, symbols: List[str]) -> None:
-        """Remove symbols from the monitoring list."""
-        self._symbols -= set(symbols)
-
-    @workflow.signal
-    async def shutdown(self) -> None:
-        """Gracefully shutdown the workflow."""
-        self._shutdown = True
-
-    @workflow.query
-    def get_status(self) -> dict:
-        """Query current monitoring status."""
-        return {
-            "symbols": list(self._symbols),
-            "seen_articles": len(self._seen_articles),
-            "shutting_down": self._shutdown,
-        }
-
-    @workflow.run
-    async def run(self, params: NewsWatcherParams) -> None:
-        # Initialize state
-        self._symbols = set(params.initial_symbols)
-        iterations = 0
-
-        workflow.logger.info(
-            f"Starting news watcher for {len(self._symbols)} symbols"
-        )
-
-        while not self._shutdown:
-            if self._symbols:
-                try:
-                    # Check news for all monitored symbols
-                    news_alerts = await workflow.execute_activity(
-                        check_news_activity,
-                        {
-                            "symbols": list(self._symbols),
-                            "significance_threshold": params.significance_threshold,
-                            "exclude_ids": list(self._seen_articles),
-                        },
-                        start_to_close_timeout=timedelta(minutes=2),
-                        heartbeat_timeout=timedelta(seconds=30),
-                    )
-
-                    # Filter out already-seen articles
-                    new_alerts = []
-                    for alert in news_alerts:
-                        article_id = alert.get("article_id")
-                        if article_id and article_id not in self._seen_articles:
-                            self._seen_articles.add(article_id)
-                            new_alerts.append(alert)
-
-                    # Route any new alerts
-                    if new_alerts:
-                        await workflow.execute_activity(
-                            route_alerts_activity,
-                            {
-                                "alerts": new_alerts,
-                                "alert_type": "news",
-                            },
-                            start_to_close_timeout=timedelta(seconds=30),
-                        )
-
-                except Exception as e:
-                    workflow.logger.error(f"Error checking news: {e}")
-
-            # Wait for next check interval or signal
-            await workflow.wait_condition(
-                lambda: self._shutdown,
-                timeout=timedelta(minutes=params.check_interval_minutes),
-            )
-
-            iterations += 1
-
-            # Continue-as-new to prevent history buildup
-            # Also trim seen_articles to last 1000 to prevent memory growth
-            if iterations >= 100 or len(self._seen_articles) > 1000:
-                trimmed_seen = set(list(self._seen_articles)[-500:])
-                workflow.continue_as_new(
-                    NewsWatcherParams(
-                        initial_symbols=list(self._symbols),
-                        check_interval_minutes=params.check_interval_minutes,
-                        significance_threshold=params.significance_threshold,
-                    )
-                )
-```
-
-### Price Alerts
-
-```python
-# workflows/background/price_alerts.py
-from datetime import timedelta
-from temporalio import workflow
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
-with workflow.unsafe.imports_passed_through():
-    from activities.market_data import fetch_quotes_activity
-    from activities.alerts import route_alerts_activity
-
-@dataclass
-class PriceAlert:
-    id: str
-    symbol: str
-    condition: str  # "above" | "below" | "crosses"
-    target_price: float
-    channels: List[str] = field(default_factory=lambda: ["discord"])
-    message_template: Optional[str] = None
-    one_time: bool = True  # Delete after triggering
-
-@dataclass
-class PriceAlertParams:
-    initial_alerts: List[PriceAlert] = field(default_factory=list)
-    check_interval_seconds: int = 10
-
-@workflow.defn
-class PriceAlertWorkflow:
-    """
-    Continuous workflow that monitors price levels and triggers alerts.
-
-    Supports:
-    - Above/below threshold alerts
-    - Cross alerts (bidirectional)
-    - One-time and recurring alerts
-    - Dynamic alert management via signals
-    """
-
-    def __init__(self):
-        self._alerts: Dict[str, PriceAlert] = {}
-        self._last_prices: Dict[str, float] = {}
-        self._shutdown = False
-
-    @workflow.signal
-    async def add_alert(self, alert: dict) -> None:
-        """Add a new price alert."""
-        parsed = PriceAlert(**alert)
-        self._alerts[parsed.id] = parsed
-        workflow.logger.info(f"Added alert {parsed.id} for {parsed.symbol}")
-
-    @workflow.signal
-    async def remove_alert(self, alert_id: str) -> None:
-        """Remove a price alert."""
-        if alert_id in self._alerts:
-            del self._alerts[alert_id]
-            workflow.logger.info(f"Removed alert {alert_id}")
-
-    @workflow.signal
-    async def shutdown(self) -> None:
-        """Gracefully shutdown the workflow."""
-        self._shutdown = True
-
-    @workflow.query
-    def get_alerts(self) -> List[dict]:
-        """Query active alerts."""
-        return [
-            {
-                "id": a.id,
-                "symbol": a.symbol,
-                "condition": a.condition,
-                "target_price": a.target_price,
-                "channels": a.channels,
-            }
-            for a in self._alerts.values()
-        ]
-
-    @workflow.run
-    async def run(self, params: PriceAlertParams) -> None:
-        # Initialize alerts
-        for alert_data in params.initial_alerts:
-            if isinstance(alert_data, dict):
-                alert = PriceAlert(**alert_data)
-            else:
-                alert = alert_data
-            self._alerts[alert.id] = alert
-
-        iterations = 0
-
-        while not self._shutdown:
-            if self._alerts:
-                # Get unique symbols to check
-                symbols = list(set(a.symbol for a in self._alerts.values()))
-
-                try:
-                    # Fetch current prices
-                    prices = await workflow.execute_activity(
-                        fetch_quotes_activity,
-                        symbols,
-                        start_to_close_timeout=timedelta(seconds=30),
-                    )
-
-                    # Check each alert
-                    triggered = []
-                    to_remove = []
-
-                    for alert_id, alert in list(self._alerts.items()):
-                        quote = prices.get(alert.symbol, {})
-                        price = quote.get("price")
-
-                        if price is None:
-                            continue
-
-                        last_price = self._last_prices.get(alert.symbol)
-                        is_triggered = self._check_condition(
-                            alert, price, last_price
-                        )
-
-                        if is_triggered:
-                            triggered.append(self._format_alert(alert, price))
-                            if alert.one_time:
-                                to_remove.append(alert_id)
-
-                    # Update last prices
-                    for symbol, quote in prices.items():
-                        if quote.get("price"):
-                            self._last_prices[symbol] = quote["price"]
-
-                    # Route triggered alerts
-                    if triggered:
-                        await workflow.execute_activity(
-                            route_alerts_activity,
-                            {
-                                "alerts": triggered,
-                                "alert_type": "price",
-                            },
-                            start_to_close_timeout=timedelta(seconds=30),
-                        )
-
-                    # Remove one-time alerts that triggered
-                    for alert_id in to_remove:
-                        del self._alerts[alert_id]
-
-                except Exception as e:
-                    workflow.logger.error(f"Error checking prices: {e}")
-
-            # Wait for next check or signal
-            await workflow.wait_condition(
-                lambda: self._shutdown,
-                timeout=timedelta(seconds=params.check_interval_seconds),
-            )
-
-            iterations += 1
-
-            # Continue-as-new periodically
-            if iterations >= 1000:
-                workflow.continue_as_new(
-                    PriceAlertParams(
-                        initial_alerts=[
-                            {
-                                "id": a.id,
-                                "symbol": a.symbol,
-                                "condition": a.condition,
-                                "target_price": a.target_price,
-                                "channels": a.channels,
-                                "message_template": a.message_template,
-                                "one_time": a.one_time,
-                            }
-                            for a in self._alerts.values()
-                        ],
-                        check_interval_seconds=params.check_interval_seconds,
-                    )
-                )
-
-    def _check_condition(
-        self,
-        alert: PriceAlert,
-        current_price: float,
-        last_price: Optional[float],
-    ) -> bool:
-        """Check if alert condition is met."""
-        if alert.condition == "above":
-            return current_price >= alert.target_price
-        elif alert.condition == "below":
-            return current_price <= alert.target_price
-        elif alert.condition == "crosses":
-            if last_price is None:
-                return False
-            # Check if price crossed the target in either direction
-            crossed_up = last_price < alert.target_price <= current_price
-            crossed_down = last_price > alert.target_price >= current_price
-            return crossed_up or crossed_down
-        return False
-
-    def _format_alert(self, alert: PriceAlert, price: float) -> dict:
-        """Format alert for notification."""
-        if alert.message_template:
-            message = alert.message_template.format(
-                symbol=alert.symbol,
-                price=price,
-                target=alert.target_price,
-                condition=alert.condition,
-            )
-        else:
-            message = (
-                f"{alert.symbol} {alert.condition} ${alert.target_price:.2f} "
-                f"(current: ${price:.2f})"
-            )
-
-        return {
-            "alert_id": alert.id,
-            "symbol": alert.symbol,
-            "type": "price",
-            "condition": alert.condition,
-            "target_price": alert.target_price,
-            "current_price": price,
-            "message": message,
-            "channels": alert.channels,
-        }
-```
+## Durable Object Alarms
 
 ### Portfolio Monitor
 
-```python
-# workflows/background/portfolio_monitor.py
-from datetime import timedelta
-from temporalio import workflow
-from dataclasses import dataclass, field
-from typing import List, Optional
+Continuously monitors user positions for alerts.
 
-with workflow.unsafe.imports_passed_through():
-    from activities.portfolio import (
-        fetch_portfolio_activity,
-        check_assignment_risk_activity,
-    )
-    from activities.alerts import route_alerts_activity
+```typescript
+// src/durableObjects/portfolioMonitor.ts
+interface MonitorConfig {
+  userId: string;
+  positions: Position[];
+  alertRules: AlertRule[];
+  checkIntervalMs: number;
+}
 
-@dataclass
-class PortfolioMonitorConfig:
-    # P&L thresholds (as percentage)
-    daily_loss_warning: float = 2.0  # Warn at 2% daily loss
-    daily_loss_critical: float = 5.0  # Critical at 5% daily loss
+interface AlertRule {
+  type: "price_above" | "price_below" | "delta_breach" | "dte_warning";
+  threshold: number;
+  symbol?: string; // Optional - if not set, applies to all
+}
 
-    # Margin thresholds (as percentage)
-    margin_warning: float = 70.0  # Warn at 70% margin utilization
-    margin_critical: float = 85.0  # Critical at 85%
+export class PortfolioMonitor implements DurableObject {
+  private state: DurableObjectState;
+  private env: Env;
 
-    # Assignment risk
-    check_assignment_risk: bool = True
-    assignment_risk_dte: int = 3  # Check options within 3 DTE
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
 
-    # Concentration risk
-    max_position_percent: float = 20.0  # Max 20% in single position
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
 
-@dataclass
-class PortfolioMonitorParams:
-    account_id: str
-    config: PortfolioMonitorConfig = field(default_factory=PortfolioMonitorConfig)
-    check_interval_minutes: int = 1
-    notify_channels: List[str] = field(default_factory=lambda: ["discord"])
+    switch (url.pathname) {
+      case "/start":
+        return this.start(request);
+      case "/stop":
+        return this.stop();
+      case "/status":
+        return this.getStatus();
+      case "/update-rules":
+        return this.updateRules(request);
+      default:
+        return new Response("Not Found", { status: 404 });
+    }
+  }
 
-@workflow.defn
-class PortfolioMonitorWorkflow:
-    """
-    Monitors portfolio for risk conditions.
+  async start(request: Request): Promise<Response> {
+    const config = await request.json<MonitorConfig>();
 
-    Checks:
-    - Daily P&L thresholds
-    - Margin utilization
-    - Assignment risk (ITM options near expiration)
-    - Position concentration
-    """
+    await this.state.storage.put("config", config);
+    await this.state.storage.put("active", true);
+    await this.state.storage.put("stats", {
+      checksPerformed: 0,
+      alertsTriggered: 0,
+      lastCheck: null,
+    });
 
-    def __init__(self):
-        self._shutdown = False
-        self._config: Optional[PortfolioMonitorConfig] = None
-        self._last_alert_times: dict = {}  # Prevent alert spam
+    // Start the alarm loop
+    await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
 
-    @workflow.signal
-    async def update_config(self, config: dict) -> None:
-        """Update monitoring configuration."""
-        self._config = PortfolioMonitorConfig(**config)
+    return Response.json({ status: "started", nextCheck: Date.now() + config.checkIntervalMs });
+  }
 
-    @workflow.signal
-    async def shutdown(self) -> None:
-        """Gracefully shutdown the workflow."""
-        self._shutdown = True
+  async stop(): Promise<Response> {
+    await this.state.storage.put("active", false);
+    await this.state.storage.deleteAlarm();
 
-    @workflow.query
-    def get_status(self) -> dict:
-        """Query current monitoring status."""
-        return {
-            "config": self._config.__dict__ if self._config else None,
-            "shutting_down": self._shutdown,
+    return Response.json({ status: "stopped" });
+  }
+
+  async getStatus(): Promise<Response> {
+    const active = await this.state.storage.get<boolean>("active");
+    const stats = await this.state.storage.get("stats");
+    const config = await this.state.storage.get<MonitorConfig>("config");
+    const alarm = await this.state.storage.getAlarm();
+
+    return Response.json({
+      active,
+      stats,
+      positionCount: config?.positions.length || 0,
+      ruleCount: config?.alertRules.length || 0,
+      nextCheckAt: alarm,
+    });
+  }
+
+  async updateRules(request: Request): Promise<Response> {
+    const { alertRules } = await request.json<{ alertRules: AlertRule[] }>();
+    const config = await this.state.storage.get<MonitorConfig>("config");
+
+    if (config) {
+      config.alertRules = alertRules;
+      await this.state.storage.put("config", config);
+    }
+
+    return Response.json({ status: "updated", ruleCount: alertRules.length });
+  }
+
+  async alarm(): Promise<void> {
+    const active = await this.state.storage.get<boolean>("active");
+    if (!active) return;
+
+    const config = await this.state.storage.get<MonitorConfig>("config");
+    if (!config) return;
+
+    try {
+      await this.performCheck(config);
+    } catch (error) {
+      console.error("Portfolio monitor check failed:", error);
+    }
+
+    // Schedule next check
+    await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
+  }
+
+  private async performCheck(config: MonitorConfig): Promise<void> {
+    const { userId, positions, alertRules } = config;
+
+    // Fetch current quotes
+    const symbols = [...new Set(positions.map((p) => p.symbol))];
+    const response = await this.env.PYTHON_WORKER.fetch(
+      new Request("https://internal/quotes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Id": userId,
+        },
+        body: JSON.stringify({ symbols }),
+      })
+    );
+    const quotes = await response.json<Record<string, Quote>>();
+
+    // Check each position against rules
+    const triggeredAlerts: TriggeredAlert[] = [];
+
+    for (const position of positions) {
+      const quote = quotes[position.symbol];
+      if (!quote) continue;
+
+      for (const rule of alertRules) {
+        // Skip if rule is symbol-specific and doesn't match
+        if (rule.symbol && rule.symbol !== position.symbol) continue;
+
+        if (this.checkRule(position, quote, rule)) {
+          triggeredAlerts.push({
+            ruleType: rule.type,
+            symbol: position.symbol,
+            threshold: rule.threshold,
+            currentValue: this.getCurrentValue(position, quote, rule.type),
+            timestamp: Date.now(),
+          });
         }
+      }
+    }
 
-    @workflow.run
-    async def run(self, params: PortfolioMonitorParams) -> None:
-        self._config = params.config
-        iterations = 0
+    // Update stats
+    const stats = await this.state.storage.get("stats") as any;
+    stats.checksPerformed++;
+    stats.lastCheck = Date.now();
+    stats.alertsTriggered += triggeredAlerts.length;
+    await this.state.storage.put("stats", stats);
 
-        while not self._shutdown:
-            try:
-                # Fetch current portfolio state
-                portfolio = await workflow.execute_activity(
-                    fetch_portfolio_activity,
-                    params.account_id,
-                    start_to_close_timeout=timedelta(minutes=1),
-                )
+    // Queue notifications for triggered alerts
+    for (const alert of triggeredAlerts) {
+      await this.env.QUEUE.send({
+        type: "position_alert",
+        userId,
+        alert,
+      });
+    }
+  }
 
-                alerts = []
+  private checkRule(position: Position, quote: Quote, rule: AlertRule): boolean {
+    switch (rule.type) {
+      case "price_above":
+        return quote.price > rule.threshold;
+      case "price_below":
+        return quote.price < rule.threshold;
+      case "delta_breach":
+        return position.delta != null && Math.abs(position.delta) > rule.threshold;
+      case "dte_warning":
+        return position.dte != null && position.dte <= rule.threshold;
+      default:
+        return false;
+    }
+  }
 
-                # Check P&L thresholds
-                if portfolio.get("day_pnl_percent") is not None:
-                    pnl_pct = portfolio["day_pnl_percent"]
-
-                    if pnl_pct <= -self._config.daily_loss_critical:
-                        alerts.append({
-                            "type": "pnl_critical",
-                            "severity": "critical",
-                            "message": f"CRITICAL: Daily P&L at {pnl_pct:.1f}%",
-                            "details": {"pnl_percent": pnl_pct},
-                        })
-                    elif pnl_pct <= -self._config.daily_loss_warning:
-                        alerts.append({
-                            "type": "pnl_warning",
-                            "severity": "warning",
-                            "message": f"Warning: Daily P&L at {pnl_pct:.1f}%",
-                            "details": {"pnl_percent": pnl_pct},
-                        })
-
-                # Check margin utilization
-                if portfolio.get("margin_utilization") is not None:
-                    margin_pct = portfolio["margin_utilization"]
-
-                    if margin_pct >= self._config.margin_critical:
-                        alerts.append({
-                            "type": "margin_critical",
-                            "severity": "critical",
-                            "message": f"CRITICAL: Margin utilization at {margin_pct:.0f}%",
-                            "details": {"margin_utilization": margin_pct},
-                        })
-                    elif margin_pct >= self._config.margin_warning:
-                        alerts.append({
-                            "type": "margin_warning",
-                            "severity": "warning",
-                            "message": f"Warning: Margin utilization at {margin_pct:.0f}%",
-                            "details": {"margin_utilization": margin_pct},
-                        })
-
-                # Check assignment risk
-                if self._config.check_assignment_risk:
-                    positions = portfolio.get("positions", [])
-                    option_positions = [
-                        p for p in positions
-                        if p.get("option_type") is not None
-                    ]
-
-                    if option_positions:
-                        assignment_risks = await workflow.execute_activity(
-                            check_assignment_risk_activity,
-                            {
-                                "positions": option_positions,
-                                "dte_threshold": self._config.assignment_risk_dte,
-                            },
-                            start_to_close_timeout=timedelta(seconds=30),
-                        )
-                        alerts.extend(assignment_risks)
-
-                # Check concentration risk
-                total_value = portfolio.get("total_value", 0)
-                if total_value > 0:
-                    for position in portfolio.get("positions", []):
-                        position_pct = (
-                            position.get("market_value", 0) / total_value * 100
-                        )
-                        if position_pct > self._config.max_position_percent:
-                            alerts.append({
-                                "type": "concentration_warning",
-                                "severity": "warning",
-                                "symbol": position.get("symbol"),
-                                "message": (
-                                    f"Concentration warning: {position.get('symbol')} "
-                                    f"is {position_pct:.1f}% of portfolio"
-                                ),
-                                "details": {"position_percent": position_pct},
-                            })
-
-                # Filter out duplicate alerts (throttle)
-                alerts = self._throttle_alerts(alerts)
-
-                # Route alerts
-                if alerts:
-                    for alert in alerts:
-                        alert["channels"] = params.notify_channels
-
-                    await workflow.execute_activity(
-                        route_alerts_activity,
-                        {
-                            "alerts": alerts,
-                            "alert_type": "portfolio",
-                        },
-                        start_to_close_timeout=timedelta(seconds=30),
-                    )
-
-            except Exception as e:
-                workflow.logger.error(f"Error monitoring portfolio: {e}")
-
-            # Wait for next check
-            await workflow.wait_condition(
-                lambda: self._shutdown,
-                timeout=timedelta(minutes=params.check_interval_minutes),
-            )
-
-            iterations += 1
-            if iterations >= 100:
-                workflow.continue_as_new(params)
-
-    def _throttle_alerts(self, alerts: list) -> list:
-        """Throttle alerts to prevent spam (one per type per 5 minutes)."""
-        now = workflow.now()
-        throttle_duration = timedelta(minutes=5)
-        filtered = []
-
-        for alert in alerts:
-            alert_key = f"{alert['type']}:{alert.get('symbol', 'all')}"
-            last_time = self._last_alert_times.get(alert_key)
-
-            if last_time is None or (now - last_time) > throttle_duration:
-                filtered.append(alert)
-                self._last_alert_times[alert_key] = now
-
-        return filtered
+  private getCurrentValue(position: Position, quote: Quote, ruleType: string): number {
+    switch (ruleType) {
+      case "price_above":
+      case "price_below":
+        return quote.price;
+      case "delta_breach":
+        return position.delta || 0;
+      case "dte_warning":
+        return position.dte || 0;
+      default:
+        return 0;
+    }
+  }
+}
 ```
 
-## Scheduled Workflows
+### Price Alert Durable Object
 
-### Scheduled Screener
+One-time or recurring price alerts.
 
-```python
-# workflows/background/scheduled_screener.py
-from datetime import timedelta
-from temporalio import workflow
-from dataclasses import dataclass, field
-from typing import List, Optional
+```typescript
+// src/durableObjects/priceAlert.ts
+interface PriceAlertConfig {
+  userId: string;
+  symbol: string;
+  condition: "above" | "below";
+  threshold: number;
+  recurring: boolean;
+  checkIntervalMs: number;
+}
 
-with workflow.unsafe.imports_passed_through():
-    from activities.screener import run_csp_screener_activity
-    from activities.storage import store_screener_results_activity
-    from activities.alerts import send_notifications_activity
+export class PriceAlertDO implements DurableObject {
+  private state: DurableObjectState;
+  private env: Env;
 
-@dataclass
-class ScheduledScreenerParams:
-    screener_id: str
-    screener_params: dict
-    notify_channels: List[str] = field(default_factory=list)
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
 
-@workflow.defn
-class ScheduledScreenerWorkflow:
-    """
-    Workflow that runs a screener on a schedule.
-    Managed via Temporal Schedules for cron-like execution.
-    """
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
 
-    @workflow.run
-    async def run(self, params: ScheduledScreenerParams) -> dict:
-        workflow.logger.info(f"Running scheduled screener: {params.screener_id}")
+    switch (url.pathname) {
+      case "/set":
+        return this.setAlert(request);
+      case "/cancel":
+        return this.cancelAlert();
+      case "/status":
+        return this.getStatus();
+      default:
+        return new Response("Not Found", { status: 404 });
+    }
+  }
 
-        # Run the screener
-        result = await workflow.execute_activity(
-            run_csp_screener_activity,
-            params.screener_params,
-            start_to_close_timeout=timedelta(minutes=30),
-            heartbeat_timeout=timedelta(minutes=2),
-        )
+  async setAlert(request: Request): Promise<Response> {
+    const config = await request.json<PriceAlertConfig>();
 
-        # Store results
-        await workflow.execute_activity(
-            store_screener_results_activity,
-            {
-                "screener_id": params.screener_id,
-                "results": result,
-                "run_time": str(workflow.now()),
-            },
-            start_to_close_timeout=timedelta(seconds=30),
-        )
+    await this.state.storage.put("config", config);
+    await this.state.storage.put("triggered", false);
+    await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
 
-        # Send notifications if there are results
-        if params.notify_channels and result.get("recommendations"):
-            message = self._format_results_message(result)
+    return Response.json({ status: "alert_set", config });
+  }
 
-            await workflow.execute_activity(
-                send_notifications_activity,
-                {
-                    "channels": params.notify_channels,
-                    "title": f"CSP Screener Results: {params.screener_id}",
-                    "message": message,
-                    "data": result,
-                },
-                start_to_close_timeout=timedelta(seconds=30),
-            )
+  async cancelAlert(): Promise<Response> {
+    await this.state.storage.deleteAll();
+    await this.state.storage.deleteAlarm();
 
-        return {
-            "screener_id": params.screener_id,
-            "run_time": str(workflow.now()),
-            "candidates_screened": result.get("candidates_screened", 0),
-            "recommendations_count": len(result.get("recommendations", [])),
-        }
+    return Response.json({ status: "cancelled" });
+  }
 
-    def _format_results_message(self, result: dict) -> str:
-        """Format screener results for notification."""
-        recs = result.get("recommendations", [])
-        if not recs:
-            return "No opportunities found meeting criteria."
+  async getStatus(): Promise<Response> {
+    const config = await this.state.storage.get<PriceAlertConfig>("config");
+    const triggered = await this.state.storage.get<boolean>("triggered");
+    const alarm = await this.state.storage.getAlarm();
 
-        lines = [f"Found {len(recs)} opportunities:"]
-        for rec in recs[:5]:  # Top 5
-            symbol = rec.get("symbol", "?")
-            strike = rec.get("best_strike", "?")
-            exp = rec.get("best_expiration", "?")
-            roc = rec.get("weekly_roc", 0)
-            lines.append(f"  - {symbol}: ${strike} put, exp {exp}, {roc:.2f}%/wk")
+    return Response.json({
+      config,
+      triggered,
+      nextCheckAt: alarm,
+    });
+  }
 
-        if len(recs) > 5:
-            lines.append(f"  ... and {len(recs) - 5} more")
+  async alarm(): Promise<void> {
+    const config = await this.state.storage.get<PriceAlertConfig>("config");
+    if (!config) return;
 
-        return "\n".join(lines)
+    // Fetch current price
+    const response = await this.env.PYTHON_WORKER.fetch(
+      new Request("https://internal/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: [config.symbol] }),
+      })
+    );
+    const quotes = await response.json<Record<string, Quote>>();
+    const quote = quotes[config.symbol];
+
+    if (!quote) {
+      // Reschedule if quote unavailable
+      await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
+      return;
+    }
+
+    // Check condition
+    const triggered =
+      (config.condition === "above" && quote.price >= config.threshold) ||
+      (config.condition === "below" && quote.price <= config.threshold);
+
+    if (triggered) {
+      // Send notification
+      await this.env.QUEUE.send({
+        type: "price_alert_triggered",
+        userId: config.userId,
+        symbol: config.symbol,
+        condition: config.condition,
+        threshold: config.threshold,
+        currentPrice: quote.price,
+      });
+
+      if (config.recurring) {
+        // Reset for next trigger (swap condition)
+        await this.state.storage.put("triggered", true);
+        await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
+      } else {
+        // One-time alert - cleanup
+        await this.state.storage.deleteAll();
+      }
+    } else {
+      // Not triggered - schedule next check
+      await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
+    }
+  }
+}
 ```
 
-### Daily/Weekly Reports
+### News Watcher
 
-```python
-# workflows/background/reports.py
-from datetime import timedelta, date
-from temporalio import workflow
-from dataclasses import dataclass, field
-from typing import List
+Monitors news for specified symbols.
 
-with workflow.unsafe.imports_passed_through():
-    from activities.portfolio import fetch_portfolio_summary_activity
-    from activities.storage import fetch_analysis_history_activity
-    from activities.alerts import send_notifications_activity
+```typescript
+// src/durableObjects/newsWatcher.ts
+interface NewsWatcherConfig {
+  userId: string;
+  symbols: string[];
+  keywords: string[];
+  checkIntervalMs: number;
+}
 
-@dataclass
-class DailyReportParams:
-    account_id: str
-    notify_channels: List[str] = field(default_factory=lambda: ["email"])
+export class NewsWatcher implements DurableObject {
+  private state: DurableObjectState;
+  private env: Env;
 
-@workflow.defn
-class DailyReportWorkflow:
-    """Generate and send daily portfolio report."""
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
 
-    @workflow.run
-    async def run(self, params: DailyReportParams) -> dict:
-        # Fetch portfolio summary
-        portfolio = await workflow.execute_activity(
-            fetch_portfolio_summary_activity,
-            params.account_id,
-            start_to_close_timeout=timedelta(minutes=1),
-        )
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
 
-        # Fetch today's analysis history
-        analyses = await workflow.execute_activity(
-            fetch_analysis_history_activity,
-            {"date": str(date.today())},
-            start_to_close_timeout=timedelta(seconds=30),
-        )
+    switch (url.pathname) {
+      case "/start":
+        return this.start(request);
+      case "/stop":
+        return this.stop();
+      case "/add-symbol":
+        return this.addSymbol(request);
+      case "/remove-symbol":
+        return this.removeSymbol(request);
+      default:
+        return new Response("Not Found", { status: 404 });
+    }
+  }
 
-        # Generate report
-        report = self._generate_daily_report(portfolio, analyses)
+  async start(request: Request): Promise<Response> {
+    const config = await request.json<NewsWatcherConfig>();
 
-        # Send notifications
-        await workflow.execute_activity(
-            send_notifications_activity,
-            {
-                "channels": params.notify_channels,
-                "title": f"Daily Report - {date.today()}",
-                "message": report,
-                "format": "markdown",
-            },
-            start_to_close_timeout=timedelta(seconds=30),
-        )
+    await this.state.storage.put("config", config);
+    await this.state.storage.put("active", true);
+    await this.state.storage.put("seenArticles", new Set<string>());
+    await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
 
-        return {"report_date": str(date.today()), "sent": True}
+    return Response.json({ status: "started" });
+  }
 
-    def _generate_daily_report(self, portfolio: dict, analyses: list) -> str:
-        """Generate daily report in markdown format."""
-        lines = [
-            f"# Daily Portfolio Report - {date.today()}",
-            "",
-            "## Portfolio Summary",
-            f"- **Total Value:** ${portfolio.get('total_value', 0):,.2f}",
-            f"- **Day P&L:** ${portfolio.get('day_pnl', 0):,.2f} ({portfolio.get('day_pnl_percent', 0):.2f}%)",
-            f"- **Open Positions:** {portfolio.get('position_count', 0)}",
-            f"- **Buying Power:** ${portfolio.get('buying_power', 0):,.2f}",
-            "",
-            "## Today's Activity",
-        ]
+  async stop(): Promise<Response> {
+    await this.state.storage.put("active", false);
+    await this.state.storage.deleteAlarm();
 
-        if analyses:
-            lines.append(f"- Analyzed {len(analyses)} symbols")
-            recommendations = [a for a in analyses if a.get('recommendation') == 'select']
-            if recommendations:
-                lines.append(f"- {len(recommendations)} opportunities identified")
-        else:
-            lines.append("- No analyses run today")
+    return Response.json({ status: "stopped" });
+  }
 
-        lines.extend([
-            "",
-            "## Positions Requiring Attention",
-        ])
+  async addSymbol(request: Request): Promise<Response> {
+    const { symbol } = await request.json<{ symbol: string }>();
+    const config = await this.state.storage.get<NewsWatcherConfig>("config");
 
-        # Add positions with high risk
-        risky_positions = [
-            p for p in portfolio.get("positions", [])
-            if p.get("dte", 999) <= 7 or p.get("pnl_percent", 0) <= -20
-        ]
+    if (config && !config.symbols.includes(symbol)) {
+      config.symbols.push(symbol);
+      await this.state.storage.put("config", config);
+    }
 
-        if risky_positions:
-            for pos in risky_positions:
-                lines.append(f"- **{pos.get('symbol')}**: {pos.get('notes', 'Review needed')}")
-        else:
-            lines.append("- None")
+    return Response.json({ status: "added", symbols: config?.symbols });
+  }
 
-        return "\n".join(lines)
+  async removeSymbol(request: Request): Promise<Response> {
+    const { symbol } = await request.json<{ symbol: string }>();
+    const config = await this.state.storage.get<NewsWatcherConfig>("config");
 
+    if (config) {
+      config.symbols = config.symbols.filter((s) => s !== symbol);
+      await this.state.storage.put("config", config);
+    }
 
-@dataclass
-class WeeklyReportParams:
-    account_id: str
-    notify_channels: List[str] = field(default_factory=lambda: ["email"])
+    return Response.json({ status: "removed", symbols: config?.symbols });
+  }
 
-@workflow.defn
-class WeeklyReportWorkflow:
-    """Generate and send weekly portfolio report."""
+  async alarm(): Promise<void> {
+    const active = await this.state.storage.get<boolean>("active");
+    if (!active) return;
 
-    @workflow.run
-    async def run(self, params: WeeklyReportParams) -> dict:
-        # Similar to daily but with weekly aggregations
-        # ... implementation
-        pass
+    const config = await this.state.storage.get<NewsWatcherConfig>("config");
+    if (!config) return;
+
+    try {
+      await this.checkNews(config);
+    } catch (error) {
+      console.error("News check failed:", error);
+    }
+
+    await this.state.storage.setAlarm(Date.now() + config.checkIntervalMs);
+  }
+
+  private async checkNews(config: NewsWatcherConfig): Promise<void> {
+    // Fetch news from Python worker
+    const response = await this.env.PYTHON_WORKER.fetch(
+      new Request("https://internal/news", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: config.symbols }),
+      })
+    );
+    const articles = await response.json<NewsArticle[]>();
+
+    // Filter for new articles matching keywords
+    const seenArticles = (await this.state.storage.get<Set<string>>("seenArticles")) || new Set();
+    const newArticles = articles.filter((article) => {
+      if (seenArticles.has(article.id)) return false;
+
+      // Check for keyword matches
+      const text = `${article.title} ${article.summary}`.toLowerCase();
+      return config.keywords.some((kw) => text.includes(kw.toLowerCase()));
+    });
+
+    // Queue notifications for new articles
+    for (const article of newArticles) {
+      await this.env.QUEUE.send({
+        type: "news_alert",
+        userId: config.userId,
+        article,
+      });
+      seenArticles.add(article.id);
+    }
+
+    // Prune old seen articles (keep last 1000)
+    if (seenArticles.size > 1000) {
+      const arr = Array.from(seenArticles);
+      await this.state.storage.put("seenArticles", new Set(arr.slice(-1000)));
+    } else {
+      await this.state.storage.put("seenArticles", seenArticles);
+    }
+  }
+}
 ```
 
-## Alert Routing and Deduplication
+## Cron Triggers
 
-### Notification Router
+### Scheduled Task Configuration
 
-```python
-# services/notifications.py
-import asyncio
-import hashlib
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
-import httpx
-
-@dataclass
-class NotificationChannel:
-    type: str  # "discord", "slack", "email", "mcp"
-    config: Dict[str, Any]
-
-class NotificationRouter:
-    """Routes alerts to configured notification channels."""
-
-    def __init__(self):
-        self._channels: Dict[str, NotificationChannel] = {}
-        self._sent_hashes: Dict[str, datetime] = {}
-        self._dedup_window = timedelta(minutes=5)
-
-    def register_channel(self, name: str, channel: NotificationChannel) -> None:
-        """Register a notification channel."""
-        self._channels[name] = channel
-
-    async def route(self, alert: Dict[str, Any]) -> List[str]:
-        """
-        Route an alert to appropriate channels.
-
-        Returns list of channels that were notified.
-        """
-        # Check for duplicates
-        alert_hash = self._hash_alert(alert)
-        if self._is_duplicate(alert_hash):
-            return []
-
-        # Mark as sent
-        self._sent_hashes[alert_hash] = datetime.now()
-
-        # Get target channels
-        target_channels = alert.get("channels", ["discord"])
-        notified = []
-
-        for channel_name in target_channels:
-            channel = self._channels.get(channel_name)
-            if channel is None:
-                continue
-
-            try:
-                if channel.type == "discord":
-                    await self._send_discord(channel.config, alert)
-                elif channel.type == "slack":
-                    await self._send_slack(channel.config, alert)
-                elif channel.type == "email":
-                    await self._send_email(channel.config, alert)
-                elif channel.type == "mcp":
-                    await self._publish_mcp(channel.config, alert)
-
-                notified.append(channel_name)
-
-            except Exception as e:
-                print(f"Failed to send to {channel_name}: {e}")
-
-        return notified
-
-    def _hash_alert(self, alert: Dict[str, Any]) -> str:
-        """Generate hash for deduplication."""
-        key_parts = [
-            alert.get("type", ""),
-            alert.get("symbol", ""),
-            alert.get("message", ""),
-        ]
-        return hashlib.md5("|".join(key_parts).encode()).hexdigest()
-
-    def _is_duplicate(self, alert_hash: str) -> bool:
-        """Check if alert was recently sent."""
-        last_sent = self._sent_hashes.get(alert_hash)
-        if last_sent is None:
-            return False
-        return datetime.now() - last_sent < self._dedup_window
-
-    async def _send_discord(
-        self, config: Dict[str, Any], alert: Dict[str, Any]
-    ) -> None:
-        """Send alert to Discord webhook."""
-        webhook_url = config["webhook_url"]
-
-        # Format for Discord
-        embed = self._format_discord_embed(alert)
-
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                webhook_url,
-                json={"embeds": [embed]},
-                timeout=10.0,
-            )
-
-    def _format_discord_embed(self, alert: Dict[str, Any]) -> Dict[str, Any]:
-        """Format alert as Discord embed."""
-        severity = alert.get("severity", "info")
-        color_map = {
-            "critical": 0xFF0000,  # Red
-            "warning": 0xFFA500,   # Orange
-            "info": 0x00FF00,      # Green
-        }
-
-        return {
-            "title": f"{alert.get('type', 'Alert').replace('_', ' ').title()}",
-            "description": alert.get("message", ""),
-            "color": color_map.get(severity, 0x808080),
-            "fields": [
-                {"name": "Symbol", "value": alert.get("symbol", "N/A"), "inline": True},
-                {"name": "Severity", "value": severity.title(), "inline": True},
-            ],
-            "timestamp": datetime.now().isoformat(),
-        }
-
-    async def _send_slack(
-        self, config: Dict[str, Any], alert: Dict[str, Any]
-    ) -> None:
-        """Send alert to Slack webhook."""
-        webhook_url = config["webhook_url"]
-
-        # Format for Slack
-        blocks = self._format_slack_blocks(alert)
-
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                webhook_url,
-                json={"blocks": blocks},
-                timeout=10.0,
-            )
-
-    def _format_slack_blocks(self, alert: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Format alert as Slack blocks."""
-        severity = alert.get("severity", "info")
-        emoji_map = {
-            "critical": ":rotating_light:",
-            "warning": ":warning:",
-            "info": ":information_source:",
-        }
-
-        return [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"{emoji_map.get(severity, '')} {alert.get('type', 'Alert')}",
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": alert.get("message", ""),
-                }
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": f"*Symbol:* {alert.get('symbol', 'N/A')} | *Severity:* {severity}",
-                    }
-                ]
-            },
-        ]
-
-    async def _send_email(
-        self, config: Dict[str, Any], alert: Dict[str, Any]
-    ) -> None:
-        """Send alert via email (SMTP)."""
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-
-        smtp_host = config["smtp_host"]
-        smtp_port = config.get("smtp_port", 587)
-        smtp_user = config["smtp_user"]
-        smtp_pass = config["smtp_pass"]
-        from_addr = config["from_address"]
-        to_addrs = config["to_addresses"]
-
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"[{alert.get('severity', 'INFO').upper()}] {alert.get('type', 'Alert')}"
-        msg["From"] = from_addr
-        msg["To"] = ", ".join(to_addrs)
-
-        # Plain text
-        text = f"{alert.get('message', '')}\n\nSymbol: {alert.get('symbol', 'N/A')}"
-        msg.attach(MIMEText(text, "plain"))
-
-        # HTML
-        html = f"""
-        <html>
-        <body>
-            <h2>{alert.get('type', 'Alert')}</h2>
-            <p>{alert.get('message', '')}</p>
-            <p><strong>Symbol:</strong> {alert.get('symbol', 'N/A')}</p>
-        </body>
-        </html>
-        """
-        msg.attach(MIMEText(html, "html"))
-
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(from_addr, to_addrs, msg.as_string())
-
-    async def _publish_mcp(
-        self, config: Dict[str, Any], alert: Dict[str, Any]
-    ) -> None:
-        """Publish alert to MCP resource (via Redis pub/sub)."""
-        from db.redis import RedisCache
-
-        redis = RedisCache()
-        await redis.connect()
-
-        try:
-            await redis.publish("alerts", alert)
-        finally:
-            await redis.disconnect()
+```toml
+# wrangler.toml
+[triggers]
+crons = [
+  "30 14 * * 1-5",     # 9:30 AM ET - Market open
+  "0 21 * * 1-5",      # 4:00 PM ET - Market close
+  "0 14-21 * * 1-5",   # Hourly during market hours
+  "0 22 * * 1-5",      # 5:00 PM ET - Daily reports
+  "0 22 * * 5"         # 5:00 PM ET Friday - Weekly summary
+]
 ```
 
-## Rate Limiting and Prioritization
+### Cron Handler
 
-### Alert Rate Limiter
+```typescript
+// src/index.ts
+export default {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    const hour = new Date(event.scheduledTime).getUTCHours();
+    const dayOfWeek = new Date(event.scheduledTime).getUTCDay();
 
-```python
-# services/rate_limiter.py
-from datetime import datetime, timedelta
-from typing import Dict, Optional
-from dataclasses import dataclass, field
-from collections import defaultdict
+    // Market open (9:30 AM ET = 14:30 UTC)
+    if (event.cron === "30 14 * * 1-5") {
+      await handleMarketOpen(env);
+      return;
+    }
 
-@dataclass
-class RateLimitConfig:
-    # Per-type limits
-    type_limits: Dict[str, int] = field(default_factory=lambda: {
-        "price": 10,      # 10 price alerts per window
-        "news": 20,       # 20 news alerts per window
-        "portfolio": 5,   # 5 portfolio alerts per window
-    })
-    window_minutes: int = 60
-    global_limit: int = 50  # Total alerts per window
+    // Market close (4:00 PM ET = 21:00 UTC)
+    if (event.cron === "0 21 * * 1-5") {
+      await handleMarketClose(env);
+      return;
+    }
 
-class AlertRateLimiter:
-    """Rate limiter for alert delivery."""
+    // Hourly during market
+    if (event.cron === "0 14-21 * * 1-5") {
+      await handleHourlyScan(env);
+      return;
+    }
 
-    def __init__(self, config: Optional[RateLimitConfig] = None):
-        self.config = config or RateLimitConfig()
-        self._counts: Dict[str, list] = defaultdict(list)
-        self._global_count: list = []
+    // Daily report (5:00 PM ET = 22:00 UTC)
+    if (event.cron === "0 22 * * 1-5" && dayOfWeek !== 5) {
+      await handleDailyReport(env);
+      return;
+    }
 
-    def should_allow(self, alert_type: str) -> bool:
-        """Check if an alert should be allowed through."""
-        now = datetime.now()
-        window_start = now - timedelta(minutes=self.config.window_minutes)
-
-        # Clean old entries
-        self._clean_old_entries(window_start)
-
-        # Check global limit
-        if len(self._global_count) >= self.config.global_limit:
-            return False
-
-        # Check type-specific limit
-        type_limit = self.config.type_limits.get(alert_type, 10)
-        if len(self._counts[alert_type]) >= type_limit:
-            return False
-
-        return True
-
-    def record(self, alert_type: str) -> None:
-        """Record an alert being sent."""
-        now = datetime.now()
-        self._counts[alert_type].append(now)
-        self._global_count.append(now)
-
-    def _clean_old_entries(self, cutoff: datetime) -> None:
-        """Remove entries older than cutoff."""
-        self._global_count = [t for t in self._global_count if t > cutoff]
-        for alert_type in self._counts:
-            self._counts[alert_type] = [
-                t for t in self._counts[alert_type] if t > cutoff
-            ]
-
-
-@dataclass
-class PriorityConfig:
-    # Priority levels (higher = more important)
-    levels: Dict[str, int] = field(default_factory=lambda: {
-        "critical": 100,
-        "warning": 50,
-        "info": 10,
-    })
-
-class AlertPrioritizer:
-    """Prioritize alerts for delivery order."""
-
-    def __init__(self, config: Optional[PriorityConfig] = None):
-        self.config = config or PriorityConfig()
-
-    def sort_by_priority(self, alerts: list) -> list:
-        """Sort alerts by priority (highest first)."""
-        return sorted(
-            alerts,
-            key=lambda a: self.config.levels.get(a.get("severity", "info"), 0),
-            reverse=True,
-        )
-
-    def filter_by_priority(
-        self, alerts: list, min_priority: str = "info"
-    ) -> list:
-        """Filter alerts to only include those at or above min priority."""
-        min_level = self.config.levels.get(min_priority, 0)
-        return [
-            a for a in alerts
-            if self.config.levels.get(a.get("severity", "info"), 0) >= min_level
-        ]
+    // Weekly summary (Friday 5:00 PM ET)
+    if (event.cron === "0 22 * * 5") {
+      await handleWeeklySummary(env);
+      return;
+    }
+  },
+};
 ```
 
-## Schedule Setup
+### Market Open Handler
 
-### Creating Temporal Schedules
+```typescript
+async function handleMarketOpen(env: Env): Promise<void> {
+  // Get users with morning alerts enabled
+  const users = await env.DB.prepare(
+    "SELECT user_id FROM user_preferences WHERE morning_alert = 1"
+  ).all();
 
-```python
-# scripts/setup_schedules.py
-import asyncio
-from temporalio.client import Client, Schedule, ScheduleSpec, ScheduleActionStartWorkflow
+  for (const user of users.results) {
+    const userId = user.user_id as string;
 
-async def setup_schedules():
-    """Set up all scheduled workflows."""
-    client = await Client.connect("localhost:7233")
+    // Queue morning briefing
+    await env.QUEUE.send({
+      type: "morning_briefing",
+      userId,
+    });
 
-    # Morning CSP Scan (9:35 AM ET, Mon-Fri)
-    await client.create_schedule(
-        "morning-csp-scan",
-        Schedule(
-            action=ScheduleActionStartWorkflow(
-                "ScheduledScreenerWorkflow",
-                args=[{
-                    "screener_id": "morning-csp",
-                    "screener_params": {
-                        "max_price": 100,
-                        "min_roc_weekly": 0.5,
-                        "max_picks": 10,
-                    },
-                    "notify_channels": ["discord"],
-                }],
-                id="morning-csp-scan",
-                task_queue="ttai-queue",
-            ),
-            spec=ScheduleSpec(
-                cron_expressions=["35 9 * * 1-5"],
-                timezone="America/New_York",
-            ),
-        ),
-    )
-    print("Created: morning-csp-scan")
+    // Activate portfolio monitors
+    const monitorId = env.PORTFOLIO_MONITOR.idFromName(userId);
+    const monitor = env.PORTFOLIO_MONITOR.get(monitorId);
 
-    # Afternoon Scan (2:00 PM ET, Mon-Fri)
-    await client.create_schedule(
-        "afternoon-scan",
-        Schedule(
-            action=ScheduleActionStartWorkflow(
-                "ScheduledScreenerWorkflow",
-                args=[{
-                    "screener_id": "afternoon-opportunities",
-                    "screener_params": {
-                        "max_price": 75,
-                        "min_roc_weekly": 0.6,
-                        "max_picks": 5,
-                    },
-                    "notify_channels": ["discord"],
-                }],
-                id="afternoon-scan",
-                task_queue="ttai-queue",
-            ),
-            spec=ScheduleSpec(
-                cron_expressions=["0 14 * * 1-5"],
-                timezone="America/New_York",
-            ),
-        ),
-    )
-    print("Created: afternoon-scan")
+    // Fetch user positions
+    const positions = await env.DB.prepare(
+      "SELECT * FROM positions WHERE user_id = ? AND status = 'open'"
+    ).bind(userId).all();
 
-    # Daily Report (4:30 PM ET, Mon-Fri)
-    await client.create_schedule(
-        "daily-report",
-        Schedule(
-            action=ScheduleActionStartWorkflow(
-                "DailyReportWorkflow",
-                args=[{
-                    "account_id": "default",
-                    "notify_channels": ["email", "discord"],
-                }],
-                id="daily-report",
-                task_queue="ttai-queue",
-            ),
-            spec=ScheduleSpec(
-                cron_expressions=["30 16 * * 1-5"],
-                timezone="America/New_York",
-            ),
-        ),
-    )
-    print("Created: daily-report")
+    if (positions.results.length > 0) {
+      const alerts = await env.DB.prepare(
+        "SELECT * FROM alerts WHERE user_id = ? AND status = 'active'"
+      ).bind(userId).all();
 
-    # Weekly Summary (Friday 5:00 PM ET)
-    await client.create_schedule(
-        "weekly-summary",
-        Schedule(
-            action=ScheduleActionStartWorkflow(
-                "WeeklyReportWorkflow",
-                args=[{
-                    "account_id": "default",
-                    "notify_channels": ["email"],
-                }],
-                id="weekly-summary",
-                task_queue="ttai-queue",
-            ),
-            spec=ScheduleSpec(
-                cron_expressions=["0 17 * * 5"],
-                timezone="America/New_York",
-            ),
-        ),
-    )
-    print("Created: weekly-summary")
-
-    print("\nAll schedules created successfully!")
-
-if __name__ == "__main__":
-    asyncio.run(setup_schedules())
+      await monitor.fetch(
+        new Request("https://internal/start", {
+          method: "POST",
+          body: JSON.stringify({
+            userId,
+            positions: positions.results,
+            alertRules: alerts.results.map((a: any) => ({
+              type: a.alert_type,
+              threshold: a.threshold,
+              symbol: a.symbol,
+            })),
+            checkIntervalMs: 60000, // 1 minute
+          }),
+        })
+      );
+    }
+  }
+}
 ```
 
-### Starting Background Workflows
+### Market Close Handler
 
-```python
-# scripts/start_background_workflows.py
-import asyncio
-from temporalio.client import Client
+```typescript
+async function handleMarketClose(env: Env): Promise<void> {
+  // Stop all portfolio monitors
+  const users = await env.DB.prepare(
+    "SELECT DISTINCT user_id FROM positions WHERE status = 'open'"
+  ).all();
 
-async def start_background_workflows():
-    """Start long-running background workflows."""
-    client = await Client.connect("localhost:7233")
+  for (const user of users.results) {
+    const userId = user.user_id as string;
 
-    # Start News Watcher
-    await client.start_workflow(
-        "NewsWatcherWorkflow",
-        args=[{
-            "initial_symbols": [],  # Will be updated via signal
-            "check_interval_minutes": 5,
-        }],
-        id="news-watcher",
-        task_queue="ttai-queue",
-    )
-    print("Started: news-watcher")
+    // Stop monitor
+    const monitorId = env.PORTFOLIO_MONITOR.idFromName(userId);
+    const monitor = env.PORTFOLIO_MONITOR.get(monitorId);
+    await monitor.fetch(new Request("https://internal/stop", { method: "POST" }));
 
-    # Start Price Alert Monitor
-    await client.start_workflow(
-        "PriceAlertWorkflow",
-        args=[{
-            "initial_alerts": [],  # Will be updated via signal
-            "check_interval_seconds": 10,
-        }],
-        id="price-alerts",
-        task_queue="ttai-queue",
-    )
-    print("Started: price-alerts")
-
-    # Start Portfolio Monitor
-    await client.start_workflow(
-        "PortfolioMonitorWorkflow",
-        args=[{
-            "account_id": "default",
-            "config": {},  # Uses defaults
-            "check_interval_minutes": 1,
-            "notify_channels": ["discord"],
-        }],
-        id="portfolio-monitor",
-        task_queue="ttai-queue",
-    )
-    print("Started: portfolio-monitor")
-
-    print("\nAll background workflows started!")
-
-if __name__ == "__main__":
-    asyncio.run(start_background_workflows())
+    // Queue EOD summary
+    await env.QUEUE.send({
+      type: "eod_summary",
+      userId,
+    });
+  }
+}
 ```
+
+### Hourly Scan Handler
+
+```typescript
+async function handleHourlyScan(env: Env): Promise<void> {
+  // Run auto-run screeners
+  const screeners = await env.DB.prepare(
+    "SELECT * FROM screeners WHERE auto_run = 1"
+  ).all();
+
+  for (const screener of screeners.results) {
+    await env.SCREENER_WORKFLOW.create({
+      params: {
+        userId: screener.user_id,
+        screenerId: screener.id,
+        criteria: JSON.parse(screener.criteria as string),
+        maxSymbols: 50,
+      },
+    });
+  }
+}
+```
+
+### Daily Report Handler
+
+```typescript
+async function handleDailyReport(env: Env): Promise<void> {
+  // Get users with positions
+  const users = await env.DB.prepare(
+    "SELECT DISTINCT user_id FROM positions"
+  ).all();
+
+  for (const user of users.results) {
+    const userId = user.user_id as string;
+
+    // Generate daily P&L report
+    await env.QUEUE.send({
+      type: "daily_report",
+      userId,
+    });
+  }
+}
+
+async function handleWeeklySummary(env: Env): Promise<void> {
+  // Similar to daily but with weekly aggregation
+  const users = await env.DB.prepare(
+    "SELECT DISTINCT user_id FROM positions"
+  ).all();
+
+  for (const user of users.results) {
+    await env.QUEUE.send({
+      type: "weekly_summary",
+      userId: user.user_id as string,
+    });
+  }
+}
+```
+
+## Notification Routing
+
+### Queue Consumer
+
+```typescript
+// src/notifications/handler.ts
+export async function handleNotification(
+  message: NotificationMessage,
+  env: Env
+): Promise<void> {
+  // Get user notification preferences
+  const prefs = await env.DB.prepare(
+    "SELECT notification_channels FROM user_preferences WHERE user_id = ?"
+  ).bind(message.userId).first();
+
+  if (!prefs) return;
+
+  const channels = JSON.parse(prefs.notification_channels as string || "[]");
+
+  for (const channel of channels) {
+    switch (channel) {
+      case "discord":
+        await sendDiscordNotification(message, env);
+        break;
+      case "email":
+        await sendEmailNotification(message, env);
+        break;
+      case "push":
+        await sendPushNotification(message, env);
+        break;
+    }
+  }
+}
+
+async function sendDiscordNotification(
+  message: NotificationMessage,
+  env: Env
+): Promise<void> {
+  // Get user's Discord webhook
+  const webhook = await env.DB.prepare(
+    "SELECT discord_webhook FROM user_preferences WHERE user_id = ?"
+  ).bind(message.userId).first();
+
+  if (!webhook?.discord_webhook) return;
+
+  await fetch(webhook.discord_webhook as string, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content: `**${message.title}**\n${message.body}`,
+    }),
+  });
+}
+
+async function sendEmailNotification(
+  message: NotificationMessage,
+  env: Env
+): Promise<void> {
+  // Use Cloudflare Email Workers or external service
+  // Implementation depends on email provider
+}
+
+async function sendPushNotification(
+  message: NotificationMessage,
+  env: Env
+): Promise<void> {
+  // Use web push or mobile push service
+  // Implementation depends on push provider
+}
+```
+
+## Cross-References
+
+- [Workflow Orchestration](./02-workflow-orchestration.md) - Cloudflare Workflows
+- [Data Layer](./05-data-layer.md) - Queue processing
+- [Infrastructure](./08-infrastructure.md) - Cron configuration

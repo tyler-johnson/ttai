@@ -1,594 +1,651 @@
-# Document-Based Knowledge Library
+# Knowledge Base
 
 ## Overview
 
-The knowledge base is a simple collection of markdown documents covering trading and investing topics. Documents are human-readable, version-controlled, and directly accessible by AI agents during analysis.
+The TTAI knowledge base provides trading and options education content accessible to AI agents during analysis. Documents are stored in Cloudflare R2, with semantic search powered by Cloudflare Vectorize. The system supports both direct document access via MCP resources and similarity search for context retrieval.
 
-## Design Philosophy
-
-- **Simplicity**: Plain markdown files, no database schemas or complex infrastructure
-- **Human-readable**: Documents are written for both AI and human consumption
-- **Version-controlled**: All knowledge tracked in git alongside code
-- **Extensible**: Add new documents by creating markdown files
-- **Cross-referenced**: Documents link to related topics for context
-
-## Directory Structure
+## Architecture
 
 ```
-knowledge/
-├── options/
-│   ├── strategies/
-│   │   ├── cash-secured-put.md
-│   │   ├── covered-call.md
-│   │   ├── wheel.md
-│   │   ├── iron-condor.md
-│   │   ├── iron-butterfly.md
-│   │   ├── jade-lizard.md
-│   │   ├── bull-put-spread.md
-│   │   ├── bear-call-spread.md
-│   │   ├── long-straddle.md
-│   │   ├── long-strangle.md
-│   │   ├── protective-put.md
-│   │   ├── collar.md
-│   │   └── calendar-spread.md
-│   ├── greeks/
-│   │   ├── delta.md
-│   │   ├── gamma.md
-│   │   ├── theta.md
-│   │   ├── vega.md
-│   │   └── rho.md
-│   └── trade-management/
-│       ├── rolling-positions.md
-│       ├── adjustments.md
-│       ├── exit-strategies.md
-│       └── assignment-handling.md
-├── fundamentals/
-│   ├── financial-statements.md
-│   ├── valuation-metrics.md
-│   ├── earnings-analysis.md
-│   ├── sector-analysis.md
-│   └── dividend-analysis.md
-├── technical-analysis/
-│   ├── chart-patterns.md
-│   ├── support-resistance.md
-│   ├── trend-analysis.md
-│   ├── price-action.md
-│   └── indicators/
-│       ├── moving-averages.md
-│       ├── rsi.md
-│       ├── macd.md
-│       ├── bollinger-bands.md
-│       └── volume-indicators.md
-├── market-psychology/
-│   ├── behavioral-biases.md
-│   ├── sentiment-indicators.md
-│   ├── trading-discipline.md
-│   ├── risk-of-ruin.md
-│   └── emotional-management.md
-├── risk-management/
-│   ├── position-sizing.md
-│   ├── portfolio-allocation.md
-│   ├── correlation.md
-│   ├── max-drawdown.md
-│   └── hedging-strategies.md
-└── market-mechanics/
-    ├── order-types.md
-    ├── market-structure.md
-    ├── options-settlement.md
-    ├── margin-requirements.md
-    └── tax-considerations.md
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Cloudflare Edge Network                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │              MCP Server (Resource Access)                       │ │
+│  │         knowledge://options/strategies                          │ │
+│  │         knowledge://trading/risk-management                     │ │
+│  └──────────────────────────┬─────────────────────────────────────┘ │
+│                             │                                        │
+│      ┌──────────────────────┼──────────────────────┐                │
+│      ▼                      ▼                      ▼                │
+│  ┌────────────┐    ┌────────────────┐    ┌────────────────┐        │
+│  │Cloudflare  │    │  Cloudflare    │    │  Workers AI    │        │
+│  │    R2      │    │   Vectorize    │    │  (Embeddings)  │        │
+│  │ (Storage)  │    │   (Search)     │    │                │        │
+│  │            │    │                │    │                │        │
+│  │ - Markdown │    │ - Chunk index  │    │ - bge-base-en  │        │
+│  │ - PDFs     │    │ - Similarity   │    │ - text-embed-  │        │
+│  │ - Images   │    │   search       │    │   ada-002      │        │
+│  └────────────┘    └────────────────┘    └────────────────┘        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Document Format
+## Document Storage (R2)
 
-Each markdown document follows a consistent template with YAML frontmatter for metadata.
+### Directory Structure
 
-### Template Structure
+```
+ttai-storage/
+├── knowledge/
+│   ├── options/
+│   │   ├── strategies/
+│   │   │   ├── cash-secured-put.md
+│   │   │   ├── covered-call.md
+│   │   │   ├── wheel.md
+│   │   │   ├── iron-condor.md
+│   │   │   ├── bull-put-spread.md
+│   │   │   └── bear-call-spread.md
+│   │   ├── greeks/
+│   │   │   ├── delta.md
+│   │   │   ├── gamma.md
+│   │   │   ├── theta.md
+│   │   │   ├── vega.md
+│   │   │   └── rho.md
+│   │   └── concepts/
+│   │       ├── implied-volatility.md
+│   │       ├── iv-rank.md
+│   │       ├── iv-percentile.md
+│   │       └── option-pricing.md
+│   ├── trading/
+│   │   ├── risk-management.md
+│   │   ├── position-sizing.md
+│   │   ├── portfolio-management.md
+│   │   └── trade-psychology.md
+│   ├── technical/
+│   │   ├── support-resistance.md
+│   │   ├── trend-analysis.md
+│   │   ├── fibonacci.md
+│   │   └── indicators.md
+│   └── tastytrade/
+│       ├── api-reference.md
+│       ├── order-types.md
+│       └── account-types.md
+│
+└── embeddings/
+    └── chunks/
+        ├── index.json          # Chunk metadata
+        └── vectors.bin         # Pre-computed vectors (backup)
+```
+
+### Document Format
+
+Documents use frontmatter for metadata:
 
 ```markdown
 ---
-title: Document Title
+title: Cash-Secured Put Strategy
 category: options/strategies
-tags: [income, bullish, neutral, premium-selling]
-related:
-  - covered-call.md
-  - wheel.md
-difficulty: intermediate
-last_updated: 2024-01-15
----
-
-# Document Title
-
-## Overview
-
-Brief description of the topic (2-3 sentences).
-
-## Key Concepts
-
-Core information organized in clear sections.
-
-## When to Use
-
-Situational guidance and ideal conditions.
-
-## Examples
-
-Practical examples with concrete numbers.
-
-## Risks and Considerations
-
-Important warnings and edge cases.
-
-## Related Topics
-
-- [Related Document 1](../path/to/doc.md)
-- [Related Document 2](../path/to/doc.md)
-```
-
-### Example Document: Cash-Secured Put
-
-```markdown
----
-title: Cash-Secured Put (CSP)
-category: options/strategies
-tags: [income, bullish, neutral, premium-selling, beginner-friendly]
-related:
-  - covered-call.md
-  - wheel.md
-  - bull-put-spread.md
+tags: [premium-selling, bullish, neutral]
 difficulty: beginner
-last_updated: 2024-01-15
+related:
+  - covered-call
+  - wheel
+  - bull-put-spread
+updated: 2024-01-15
 ---
 
 # Cash-Secured Put (CSP)
 
 ## Overview
 
-A cash-secured put involves selling a put option while holding enough cash
-to purchase the underlying stock if assigned. It generates income through
-premium collection while positioning to buy stock at a discount.
+A cash-secured put is an options strategy where you sell a put option
+while holding enough cash to purchase the underlying stock if assigned.
 
-## Key Concepts
+## When to Use
 
-### Position Structure
-- Sell 1 put option
-- Hold cash equal to (strike price × 100)
+- **Bullish to neutral** outlook on the underlying
+- Want to potentially acquire shares at a discount
+- Comfortable owning the stock at the strike price
+- Elevated implied volatility (better premiums)
 
-### Profit/Loss Profile
-- **Max Profit**: Premium received
-- **Max Loss**: Strike price - Premium (if stock goes to $0)
-- **Breakeven**: Strike price - Premium received
+## Risk/Reward Profile
 
-### Ideal Conditions
-- **Market Outlook**: Bullish to neutral
-- **IV Environment**: High (better premiums)
-- **Time Horizon**: 30-45 DTE optimal for theta decay
-- **Account Type**: Works in cash, margin, and IRA accounts
+| Metric          | Value                              |
+| --------------- | ---------------------------------- |
+| Max Profit      | Premium received                   |
+| Max Loss        | Strike price - premium (if → $0)   |
+| Breakeven       | Strike price - premium             |
+| Capital Req.    | Strike × 100 (per contract)        |
 
-## Strike Selection
+## Example
 
-| Delta | Risk/Reward | Probability OTM |
-|-------|-------------|-----------------|
-| 0.30  | Balanced    | ~70%            |
-| 0.20  | Conservative| ~80%            |
-| 0.40  | Aggressive  | ~60%            |
-
-Choose strikes at prices you'd be happy owning the stock.
-
-## Management Rules
-
-### Profit Taking
-- Close at 50% of max profit for capital efficiency
-- Consider closing at 21 DTE if not at target
-
-### Adjustment Triggers
-- Delta exceeds 0.50 (position tested)
-- Stock down more than 10%
-- Fundamental thesis changes
-
-### Rolling Guidelines
-1. Roll for a credit only
-2. Roll down and out when tested
-3. Never roll into earnings
-
-## Examples
-
-### Example 1: Standard CSP
-- Stock: AAPL trading at $175
-- Sell: AAPL $170 Put, 45 DTE
-- Premium: $3.50
-- Cash required: $17,000
-- Breakeven: $166.50
-- Max profit: $350 (2.1% return)
-
-### Outcomes:
-- AAPL stays above $170: Keep $350 premium
-- AAPL at $165 at expiration: Assigned at $170, cost basis $166.50
-- AAPL drops to $160: Loss of $650 ($170 - $160 - $3.50) × 100
-
-## Risks and Considerations
-
-- **Assignment Risk**: May be assigned early, especially near ex-dividend
-- **Downside Exposure**: Full downside risk below breakeven
-- **Capital Intensive**: Ties up significant cash
-- **Opportunity Cost**: Cash locked until expiration
-
-## Related Topics
-
-- [Covered Call](covered-call.md) - Pair with CSP for the wheel strategy
-- [Wheel Strategy](wheel.md) - Combines CSP and covered calls
-- [Bull Put Spread](bull-put-spread.md) - Defined-risk alternative
-- [Rolling Positions](../trade-management/rolling-positions.md)
+...
 ```
 
-## AI Access Patterns
-
-### Direct File Reading
-
-AI agents read knowledge files directly during analysis workflows.
-
-```python
-# activities/knowledge.py
-from pathlib import Path
-from typing import Optional
-import frontmatter
-
-KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
-
-async def read_knowledge_document(path: str) -> dict:
-    """Read a knowledge document and parse its frontmatter."""
-    file_path = KNOWLEDGE_DIR / path
-
-    if not file_path.exists():
-        return {"error": f"Document not found: {path}"}
-
-    post = frontmatter.load(file_path)
-    return {
-        "metadata": dict(post.metadata),
-        "content": post.content,
-    }
-
-async def list_documents(category: Optional[str] = None) -> list[dict]:
-    """List available knowledge documents."""
-    documents = []
-
-    search_path = KNOWLEDGE_DIR / category if category else KNOWLEDGE_DIR
-
-    for md_file in search_path.rglob("*.md"):
-        rel_path = md_file.relative_to(KNOWLEDGE_DIR)
-        post = frontmatter.load(md_file)
-        documents.append({
-            "path": str(rel_path),
-            "title": post.metadata.get("title", md_file.stem),
-            "category": post.metadata.get("category"),
-            "tags": post.metadata.get("tags", []),
-        })
-
-    return documents
-
-async def search_by_tag(tag: str) -> list[dict]:
-    """Find all documents with a specific tag."""
-    documents = await list_documents()
-    return [doc for doc in documents if tag in doc.get("tags", [])]
-```
-
-### MCP Resource Access
-
-Expose knowledge base through MCP resources for browsing.
+### R2 Document Service
 
 ```typescript
-// src/resources/knowledge.ts
-import { Resource } from "@modelcontextprotocol/sdk/types.js";
-import * as fs from "fs/promises";
-import * as path from "path";
-import matter from "gray-matter";
+// src/services/knowledge.ts
+export class KnowledgeService {
+  constructor(
+    private r2: R2Bucket,
+    private vectorize: VectorizeIndex
+  ) {}
 
-const KNOWLEDGE_DIR = path.join(__dirname, "../../knowledge");
+  async getDocument(path: string): Promise<KnowledgeDocument | null> {
+    const object = await this.r2.get(`knowledge/${path}`);
+    if (!object) return null;
 
-export class KnowledgeResource {
-  async listDocuments(category?: string): Promise<Resource[]> {
-    const searchDir = category
-      ? path.join(KNOWLEDGE_DIR, category)
-      : KNOWLEDGE_DIR;
+    const content = await object.text();
+    const { frontmatter, body } = this.parseFrontmatter(content);
 
-    const resources: Resource[] = [];
-    await this.walkDir(searchDir, resources);
-    return resources;
+    return {
+      path,
+      title: frontmatter.title,
+      category: frontmatter.category,
+      tags: frontmatter.tags || [],
+      content: body,
+      metadata: frontmatter,
+    };
   }
 
-  private async walkDir(dir: string, resources: Resource[]): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+  async listDocuments(prefix?: string): Promise<DocumentInfo[]> {
+    const path = prefix ? `knowledge/${prefix}` : "knowledge/";
+    const listed = await this.r2.list({ prefix: path });
 
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
+    return listed.objects
+      .filter((obj) => obj.key.endsWith(".md"))
+      .map((obj) => ({
+        path: obj.key.replace("knowledge/", ""),
+        size: obj.size,
+        updated: obj.uploaded,
+      }));
+  }
 
-      if (entry.isDirectory()) {
-        await this.walkDir(fullPath, resources);
-      } else if (entry.name.endsWith(".md")) {
-        const content = await fs.readFile(fullPath, "utf-8");
-        const { data } = matter(content);
-        const relPath = path.relative(KNOWLEDGE_DIR, fullPath);
+  async searchDocuments(query: string, limit = 5): Promise<SearchResult[]> {
+    // Generate embedding for query
+    const embedding = await this.generateEmbedding(query);
 
-        resources.push({
-          uri: `knowledge://${relPath}`,
-          name: data.title || entry.name,
-          description: `${data.category} - ${(data.tags || []).join(", ")}`,
-          mimeType: "text/markdown",
-        });
-      }
+    // Search Vectorize
+    const results = await this.vectorize.query(embedding, {
+      topK: limit,
+      returnMetadata: true,
+    });
+
+    // Fetch full documents for top results
+    const documents = await Promise.all(
+      results.matches.map(async (match) => {
+        const doc = await this.getDocument(match.metadata?.path as string);
+        return {
+          document: doc,
+          score: match.score,
+          chunk: match.metadata?.chunk as string,
+        };
+      })
+    );
+
+    return documents.filter((d) => d.document !== null) as SearchResult[];
+  }
+
+  private parseFrontmatter(content: string): {
+    frontmatter: Record<string, any>;
+    body: string;
+  } {
+    const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (!match) {
+      return { frontmatter: {}, body: content };
     }
+
+    // Simple YAML parsing (use js-yaml in production)
+    const frontmatter: Record<string, any> = {};
+    match[1].split("\n").forEach((line) => {
+      const [key, ...valueParts] = line.split(":");
+      if (key && valueParts.length) {
+        const value = valueParts.join(":").trim();
+        frontmatter[key.trim()] = value.startsWith("[")
+          ? JSON.parse(value.replace(/'/g, '"'))
+          : value;
+      }
+    });
+
+    return { frontmatter, body: match[2] };
   }
 
-  async readDocument(uri: string): Promise<string> {
-    const docPath = uri.replace("knowledge://", "");
-    const fullPath = path.join(KNOWLEDGE_DIR, docPath);
-    return fs.readFile(fullPath, "utf-8");
+  private async generateEmbedding(text: string): Promise<number[]> {
+    // Use Workers AI for embeddings
+    const response = await fetch(
+      "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/baai/bge-base-en-v1.5",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: [text] }),
+      }
+    );
+
+    const result = await response.json();
+    return result.result.data[0];
   }
 }
 ```
 
-### MCP Resource Registration
+## Cloudflare Vectorize
+
+### Index Configuration
 
 ```typescript
-// In MCP server setup
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  const knowledge = new KnowledgeResource();
-  const documents = await knowledge.listDocuments();
+// scripts/setup-vectorize.ts
+import { Vectorize } from "@cloudflare/workers-types";
 
-  return {
-    resources: documents,
-  };
-});
+// Create index via wrangler CLI:
+// wrangler vectorize create ttai-knowledge --dimensions 768 --metric cosine
 
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  const { uri } = request.params;
+interface ChunkMetadata {
+  path: string;
+  title: string;
+  category: string;
+  chunk: string;
+  chunkIndex: number;
+  totalChunks: number;
+}
+```
 
-  if (uri.startsWith("knowledge://")) {
-    const knowledge = new KnowledgeResource();
-    const content = await knowledge.readDocument(uri);
+### Document Indexing
 
-    return {
-      contents: [{
-        uri,
-        mimeType: "text/markdown",
-        text: content,
-      }],
-    };
+```typescript
+// src/services/indexer.ts
+export class DocumentIndexer {
+  constructor(
+    private r2: R2Bucket,
+    private vectorize: VectorizeIndex,
+    private ai: Ai
+  ) {}
+
+  async indexAllDocuments(): Promise<IndexResult> {
+    const documents = await this.listAllDocuments();
+    let indexed = 0;
+    let chunks = 0;
+
+    for (const docPath of documents) {
+      const result = await this.indexDocument(docPath);
+      indexed++;
+      chunks += result.chunkCount;
+    }
+
+    return { documentsIndexed: indexed, chunksCreated: chunks };
   }
 
-  // Handle other resource types...
-});
+  async indexDocument(path: string): Promise<{ chunkCount: number }> {
+    // Fetch document
+    const object = await this.r2.get(`knowledge/${path}`);
+    if (!object) throw new Error(`Document not found: ${path}`);
+
+    const content = await object.text();
+    const { frontmatter, body } = this.parseFrontmatter(content);
+
+    // Split into chunks (roughly 500 tokens each)
+    const chunks = this.splitIntoChunks(body, 500);
+
+    // Generate embeddings for all chunks
+    const embeddings = await this.generateEmbeddings(chunks);
+
+    // Upsert to Vectorize
+    const vectors = chunks.map((chunk, i) => ({
+      id: `${path}#${i}`,
+      values: embeddings[i],
+      metadata: {
+        path,
+        title: frontmatter.title || path,
+        category: frontmatter.category || "uncategorized",
+        chunk,
+        chunkIndex: i,
+        totalChunks: chunks.length,
+      },
+    }));
+
+    await this.vectorize.upsert(vectors);
+
+    return { chunkCount: chunks.length };
+  }
+
+  private splitIntoChunks(text: string, targetTokens: number): string[] {
+    const chunks: string[] = [];
+    const paragraphs = text.split(/\n\n+/);
+
+    let currentChunk = "";
+    let currentTokens = 0;
+
+    for (const paragraph of paragraphs) {
+      const paragraphTokens = this.estimateTokens(paragraph);
+
+      if (currentTokens + paragraphTokens > targetTokens && currentChunk) {
+        chunks.push(currentChunk.trim());
+        currentChunk = "";
+        currentTokens = 0;
+      }
+
+      currentChunk += paragraph + "\n\n";
+      currentTokens += paragraphTokens;
+    }
+
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+
+    return chunks;
+  }
+
+  private estimateTokens(text: string): number {
+    // Rough estimate: ~4 characters per token
+    return Math.ceil(text.length / 4);
+  }
+
+  private async generateEmbeddings(texts: string[]): Promise<number[][]> {
+    // Batch embedding generation with Workers AI
+    const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
+      text: texts,
+    });
+
+    return response.data;
+  }
+
+  private async listAllDocuments(): Promise<string[]> {
+    const listed = await this.r2.list({ prefix: "knowledge/" });
+    return listed.objects
+      .filter((obj) => obj.key.endsWith(".md"))
+      .map((obj) => obj.key.replace("knowledge/", ""));
+  }
+
+  private parseFrontmatter(content: string): {
+    frontmatter: Record<string, any>;
+    body: string;
+  } {
+    const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (!match) return { frontmatter: {}, body: content };
+
+    const frontmatter: Record<string, any> = {};
+    match[1].split("\n").forEach((line) => {
+      const colonIndex = line.indexOf(":");
+      if (colonIndex > 0) {
+        const key = line.substring(0, colonIndex).trim();
+        const value = line.substring(colonIndex + 1).trim();
+        frontmatter[key] = value;
+      }
+    });
+
+    return { frontmatter, body: match[2] };
+  }
+}
 ```
 
-## Optional: Embedding Index for Semantic Search
+## MCP Resource Access
 
-For semantic search capabilities, maintain a simple JSONL file with document embeddings.
+### Knowledge Resources
 
-### Index Structure
+```typescript
+// src/server/resources.ts
+export function registerKnowledgeResources(
+  server: McpServer,
+  services: Services
+): void {
+  const knowledge = new KnowledgeService(services.r2, services.vectorize);
 
-```jsonl
-{"path": "options/strategies/cash-secured-put.md", "embedding": [0.123, -0.456, ...], "title": "Cash-Secured Put"}
-{"path": "options/strategies/covered-call.md", "embedding": [0.234, -0.567, ...], "title": "Covered Call"}
+  // Static document access
+  server.resource(
+    "knowledge://options/strategies/{strategy}",
+    "Options strategy documentation",
+    async (uri) => {
+      const strategy = uri.pathname.split("/").pop();
+      const doc = await knowledge.getDocument(`options/strategies/${strategy}.md`);
+
+      if (!doc) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "text/plain",
+              text: `Strategy not found: ${strategy}`,
+            },
+          ],
+        };
+      }
+
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/markdown",
+            text: doc.content,
+          },
+        ],
+      };
+    }
+  );
+
+  // Document listing
+  server.resource(
+    "knowledge://list/{category}",
+    "List documents in a category",
+    async (uri) => {
+      const category = uri.pathname.replace("/list/", "");
+      const documents = await knowledge.listDocuments(category);
+
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify(documents, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // Semantic search tool
+  server.tool(
+    "search_knowledge",
+    "Search the knowledge base for relevant information",
+    {
+      query: z.string().describe("Search query"),
+      limit: z.number().optional().default(5).describe("Max results"),
+    },
+    async ({ query, limit }) => {
+      const results = await knowledge.searchDocuments(query, limit);
+
+      const formatted = results.map((r) => ({
+        title: r.document?.title,
+        path: r.document?.path,
+        score: r.score,
+        excerpt: r.chunk.substring(0, 200) + "...",
+      }));
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(formatted, null, 2),
+          },
+        ],
+      };
+    }
+  );
+}
 ```
 
-### Index Generation
+### Resource Templates
 
-```python
-# scripts/build_knowledge_index.py
-import json
-from pathlib import Path
-import frontmatter
-from sentence_transformers import SentenceTransformer
+```typescript
+// src/server/resourceTemplates.ts
+export function registerResourceTemplates(server: McpServer): void {
+  // Options strategies
+  server.resourceTemplate(
+    "knowledge://options/strategies/{strategy}",
+    "Options strategy documentation",
+    {
+      strategy: {
+        type: "string",
+        description: "Strategy name (e.g., cash-secured-put, covered-call)",
+      },
+    }
+  );
 
-KNOWLEDGE_DIR = Path("knowledge")
-INDEX_FILE = Path("knowledge/embeddings.jsonl")
+  // Greeks
+  server.resourceTemplate(
+    "knowledge://options/greeks/{greek}",
+    "Option greek documentation",
+    {
+      greek: {
+        type: "string",
+        description: "Greek name (delta, gamma, theta, vega, rho)",
+      },
+    }
+  );
 
-def build_index():
-    """Build embedding index for all knowledge documents."""
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-
-    with open(INDEX_FILE, "w") as f:
-        for md_file in KNOWLEDGE_DIR.rglob("*.md"):
-            if md_file.name == "embeddings.jsonl":
-                continue
-
-            post = frontmatter.load(md_file)
-
-            # Create text for embedding
-            text = f"{post.metadata.get('title', '')}\n{post.content[:2000]}"
-            embedding = model.encode(text).tolist()
-
-            entry = {
-                "path": str(md_file.relative_to(KNOWLEDGE_DIR)),
-                "title": post.metadata.get("title", md_file.stem),
-                "category": post.metadata.get("category"),
-                "tags": post.metadata.get("tags", []),
-                "embedding": embedding,
-            }
-
-            f.write(json.dumps(entry) + "\n")
-
-    print(f"Built index with {sum(1 for _ in KNOWLEDGE_DIR.rglob('*.md'))} documents")
-
-if __name__ == "__main__":
-    build_index()
+  // Trading concepts
+  server.resourceTemplate(
+    "knowledge://trading/{topic}",
+    "Trading concept documentation",
+    {
+      topic: {
+        type: "string",
+        description: "Topic (risk-management, position-sizing, etc.)",
+      },
+    }
+  );
+}
 ```
 
-### Semantic Search
+## Embedding Generation
 
-```python
-# services/knowledge_search.py
-import json
-import numpy as np
-from pathlib import Path
-from sentence_transformers import SentenceTransformer
+### Workers AI Integration
 
-INDEX_FILE = Path("knowledge/embeddings.jsonl")
+```typescript
+// src/services/embeddings.ts
+export class EmbeddingService {
+  constructor(private ai: Ai) {}
 
-class KnowledgeSearch:
-    def __init__(self):
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        self.index = self._load_index()
+  async generateEmbedding(text: string): Promise<number[]> {
+    const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
+      text: [text],
+    });
 
-    def _load_index(self) -> list[dict]:
-        """Load the embedding index."""
-        if not INDEX_FILE.exists():
-            return []
+    return response.data[0];
+  }
 
-        with open(INDEX_FILE) as f:
-            return [json.loads(line) for line in f]
+  async generateEmbeddings(texts: string[]): Promise<number[][]> {
+    // Batch up to 100 texts at a time
+    const batchSize = 100;
+    const embeddings: number[][] = [];
 
-    def search(self, query: str, limit: int = 5) -> list[dict]:
-        """Search documents by semantic similarity."""
-        query_embedding = self.model.encode(query)
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      const response = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
+        text: batch,
+      });
+      embeddings.push(...response.data);
+    }
 
-        results = []
-        for entry in self.index:
-            doc_embedding = np.array(entry["embedding"])
-            similarity = np.dot(query_embedding, doc_embedding) / (
-                np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
-            )
-            results.append({
-                "path": entry["path"],
-                "title": entry["title"],
-                "category": entry["category"],
-                "tags": entry["tags"],
-                "similarity": float(similarity),
-            })
-
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:limit]
+    return embeddings;
+  }
+}
 ```
 
-## Agent Integration
+### External Embedding Provider (Optional)
 
-### Knowledge Lookup Tool
+```typescript
+// src/services/externalEmbeddings.ts
+import { OpenAI } from "openai";
 
-```python
-# activities/agent_tools.py
-from typing import Optional
+export class OpenAIEmbeddingService {
+  private client: OpenAI;
 
-async def lookup_knowledge(
-    query: str,
-    category: Optional[str] = None,
-) -> dict:
-    """
-    Tool for AI agents to look up trading knowledge.
+  constructor(apiKey: string) {
+    this.client = new OpenAI({ apiKey });
+  }
 
-    Args:
-        query: What to search for (e.g., "how to roll a put option")
-        category: Optional category filter (e.g., "options/strategies")
+  async generateEmbedding(text: string): Promise<number[]> {
+    const response = await this.client.embeddings.create({
+      model: "text-embedding-ada-002",
+      input: text,
+    });
 
-    Returns:
-        Relevant knowledge documents with content
-    """
-    search = KnowledgeSearch()
-    results = search.search(query, limit=3)
+    return response.data[0].embedding;
+  }
 
-    if category:
-        results = [r for r in results if r["category"].startswith(category)]
+  async generateEmbeddings(texts: string[]): Promise<number[][]> {
+    const response = await this.client.embeddings.create({
+      model: "text-embedding-ada-002",
+      input: texts,
+    });
 
-    # Load full content for top results
-    enriched = []
-    for result in results[:3]:
-        doc = await read_knowledge_document(result["path"])
-        enriched.append({
-            **result,
-            "content": doc["content"][:3000],  # Limit content length
-        })
-
-    return {"documents": enriched}
+    return response.data.map((d) => d.embedding);
+  }
+}
 ```
 
-### Usage in Analysis Workflows
+## wrangler.toml Configuration
 
-```python
-# Example: Options analyst uses knowledge base
-async def analyze_options_position(symbol: str, position: dict) -> dict:
-    """Analyze an options position using knowledge base guidance."""
+```toml
+# wrangler.toml
 
-    # Look up relevant strategy knowledge
-    strategy_name = position.get("strategy", "cash-secured-put")
-    knowledge = await lookup_knowledge(
-        f"how to manage {strategy_name}",
-        category="options",
-    )
+# R2 bucket for document storage
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "ttai-storage"
 
-    # Use knowledge in analysis prompt
-    prompt = f"""
-    Analyze this options position:
-    {json.dumps(position, indent=2)}
+# Vectorize index for semantic search
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ttai-knowledge"
 
-    Reference material on {strategy_name}:
-    {knowledge['documents'][0]['content']}
-
-    Provide management recommendations based on the guidelines above.
-    """
-
-    # Continue with AI analysis...
+# Workers AI for embeddings
+[ai]
+binding = "AI"
 ```
 
-## Maintenance
+## Document Management CLI
 
-### Adding New Documents
+```typescript
+// scripts/manage-knowledge.ts
+import { program } from "commander";
 
-1. Create a markdown file in the appropriate directory
-2. Add YAML frontmatter with required metadata
-3. Follow the document template structure
-4. Add cross-references to related documents
-5. Run `python scripts/build_knowledge_index.py` to update embeddings
+program
+  .command("upload <path>")
+  .description("Upload a document to the knowledge base")
+  .action(async (path) => {
+    // Upload to R2 and index
+  });
 
-### Document Review Checklist
+program
+  .command("reindex")
+  .description("Reindex all documents")
+  .action(async () => {
+    const indexer = new DocumentIndexer(r2, vectorize, ai);
+    const result = await indexer.indexAllDocuments();
+    console.log(`Indexed ${result.documentsIndexed} documents, ${result.chunksCreated} chunks`);
+  });
 
-- [ ] Title and frontmatter complete
-- [ ] Category and tags accurate
-- [ ] Related documents linked
-- [ ] Examples include concrete numbers
-- [ ] Risks clearly documented
-- [ ] Content reviewed for accuracy
+program
+  .command("search <query>")
+  .description("Search the knowledge base")
+  .option("-l, --limit <number>", "Max results", "5")
+  .action(async (query, options) => {
+    const knowledge = new KnowledgeService(r2, vectorize);
+    const results = await knowledge.searchDocuments(query, parseInt(options.limit));
+    console.log(JSON.stringify(results, null, 2));
+  });
 
-### Index Maintenance
-
-Rebuild the embedding index when documents change:
-
-```bash
-# Rebuild index after document changes
-python scripts/build_knowledge_index.py
-
-# Verify index
-wc -l knowledge/embeddings.jsonl
+program.parse();
 ```
 
-## Topic Coverage
+## Cross-References
 
-### Options (Priority)
-| Document | Status | Priority |
-|----------|--------|----------|
-| Cash-Secured Put | TODO | High |
-| Covered Call | TODO | High |
-| Wheel Strategy | TODO | High |
-| Iron Condor | TODO | Medium |
-| Bull/Bear Spreads | TODO | Medium |
-| Greeks Overview | TODO | High |
-| Rolling Positions | TODO | High |
-
-### Fundamentals
-| Document | Status | Priority |
-|----------|--------|----------|
-| Financial Statements | TODO | Medium |
-| Valuation Metrics | TODO | Medium |
-| Earnings Analysis | TODO | High |
-
-### Technical Analysis
-| Document | Status | Priority |
-|----------|--------|----------|
-| Support/Resistance | TODO | High |
-| Chart Patterns | TODO | Medium |
-| Moving Averages | TODO | Medium |
-
-### Risk Management
-| Document | Status | Priority |
-|----------|--------|----------|
-| Position Sizing | TODO | High |
-| Portfolio Allocation | TODO | Medium |
-| Max Drawdown | TODO | Medium |
+- [MCP Server Design](./01-mcp-server-design.md) - Resource registration
+- [Data Layer](./05-data-layer.md) - R2 storage patterns
+- [AI Agent System](./04-ai-agent-system.md) - Agent knowledge access
+- [Infrastructure](./08-infrastructure.md) - Vectorize configuration

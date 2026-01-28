@@ -1,1095 +1,770 @@
-# Data Layer Design
+# Data Layer
 
 ## Overview
 
-The data layer provides caching, persistence, and real-time data distribution for the TastyTrade AI system. It consists of Redis for caching and real-time data, and PostgreSQL for persistent storage.
+The TTAI data layer uses Cloudflare's native storage services: KV for caching, D1 for SQLite-based persistence, R2 for object storage, and Queues for async messaging. All data is multi-tenant with `user_id` isolation.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           MCP Server                                │
-│                    (TypeScript - Cache Reads)                       │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-            ┌─────────────────────┼─────────────────────┐
-            ▼                     │                     ▼
-┌───────────────────┐             │         ┌───────────────────┐
-│   Redis Cache     │             │         │   PostgreSQL      │
-│                   │             │         │                   │
-│ - Hot: 5s TTL     │             │         │ - Analysis history│
-│ - Warm: 1-5m TTL  │             │         │ - Screener results│
-│ - Cold: 1h-1d TTL │             │         │ - Alert configs   │
-│ - Sessions: 24h   │             │         │ - Watchlists      │
-│ - Pub/Sub         │             │         │ - Trade journal   │
-└───────────────────┘             │         └───────────────────┘
-            ▲                     │                     ▲
-            │                     │                     │
-            └─────────────────────┼─────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Python Workers                               │
-│              (Cache Writes, DB Writes, Streaming)                   │
+│                     Cloudflare Edge Network                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │              MCP Server / Python Workers                        │ │
+│  └──────────────────────────┬─────────────────────────────────────┘ │
+│                             │                                        │
+│      ┌──────────────────────┼──────────────────────────┐            │
+│      ▼                      ▼                          ▼            │
+│  ┌────────────┐    ┌────────────────┐    ┌────────────────┐        │
+│  │ Cloudflare │    │  Cloudflare    │    │  Cloudflare    │        │
+│  │     KV     │    │      D1        │    │      R2        │        │
+│  │  (Cache)   │    │   (SQLite)     │    │  (Storage)     │        │
+│  │            │    │                │    │                │        │
+│  │ - Quotes   │    │ - Users        │    │ - Documents    │        │
+│  │ - Chains   │    │ - Positions    │    │ - Embeddings   │        │
+│  │ - Analysis │    │ - Analyses     │    │ - Exports      │        │
+│  │ - Sessions │    │ - OAuth tokens │    │ - Backups      │        │
+│  └────────────┘    └────────────────┘    └────────────────┘        │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                    Cloudflare Queues                            │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │ │
+│  │  │ Async Tasks │  │Notifications│  │  Analysis   │            │ │
+│  │  │   Queue     │  │   Queue     │  │   Queue     │            │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘            │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                  Cloudflare Vectorize                           │ │
+│  │              (Semantic Search / Embeddings)                     │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Redis Caching Strategy
+## Cloudflare KV (Caching)
 
 ### Cache Tiers
 
 | Tier     | TTL            | Use Case               | Examples                 |
 | -------- | -------------- | ---------------------- | ------------------------ |
-| Hot      | 5 seconds      | Real-time data         | Quotes, last price       |
-| Warm     | 1-5 minutes    | Frequently accessed    | Option chains, Greeks    |
+| Hot      | 30-60 seconds  | Real-time data         | Quotes, last price       |
+| Warm     | 5-15 minutes   | Frequently accessed    | Option chains, Greeks    |
 | Cold     | 1 hour - 1 day | Slow-changing data     | Financials, company info |
-| Session  | 24 hours       | Auth tokens            | TastyTrade sessions      |
+| Session  | 24 hours       | User sessions          | Auth state               |
 | Analysis | 15-30 minutes  | Expensive computations | Agent results            |
 
 ### Key Naming Convention
 
-```
-ttai:{tier}:{type}:{identifier}
+```typescript
+// Format: {category}:{user_id?}:{identifier}
 
-Examples:
-ttai:hot:quote:AAPL
-ttai:warm:chain:AAPL
-ttai:warm:greeks:AAPL240119P00145000
-ttai:cold:financials:AAPL
-ttai:cold:company:AAPL
-ttai:session:tastytrade:user123
-ttai:analysis:chart:AAPL:daily:standard
-ttai:analysis:full:AAPL
+// Global keys (shared across users)
+quote:{symbol}                     // AAPL quote
+chain:{symbol}:{expiration}        // Option chain
+company:{symbol}                   // Company info
+
+// User-scoped keys
+user:{user_id}:watchlist:{name}    // User watchlist
+user:{user_id}:analysis:{symbol}   // User's analysis cache
+user:{user_id}:session             // User session data
+user:{user_id}:positions           // Cached positions
 ```
 
-### Redis Client Configuration
+### KV Operations
 
 ```typescript
-// src/cache/redis.ts
-import { createClient, RedisClientType } from "redis";
+// src/services/kv.ts
+export class CacheService {
+  constructor(private kv: KVNamespace) {}
 
-export interface CacheConfig {
-  url: string;
-  prefix: string;
-}
+  // Quotes (hot tier - 60s TTL)
+  async getQuote(symbol: string): Promise<Quote | null> {
+    return this.kv.get(`quote:${symbol}`, "json");
+  }
 
-export class RedisCache {
-  private client: RedisClientType;
-  private prefix: string;
-
-  constructor(config: CacheConfig) {
-    this.prefix = config.prefix;
-    this.client = createClient({
-      url: config.url,
-      socket: {
-        reconnectStrategy: (retries) => Math.min(retries * 100, 5000),
-      },
+  async setQuote(symbol: string, quote: Quote): Promise<void> {
+    await this.kv.put(`quote:${symbol}`, JSON.stringify(quote), {
+      expirationTtl: 60,
     });
-
-    this.client.on("error", (err) => console.error("Redis error:", err));
   }
 
-  async connect(): Promise<void> {
-    await this.client.connect();
+  // Option chains (warm tier - 5m TTL)
+  async getOptionChain(symbol: string, expiration?: string): Promise<OptionChain | null> {
+    const key = expiration
+      ? `chain:${symbol}:${expiration}`
+      : `chain:${symbol}:all`;
+    return this.kv.get(key, "json");
   }
 
-  async disconnect(): Promise<void> {
-    await this.client.quit();
-  }
-
-  // Key helpers
-  private key(parts: string[]): string {
-    return `${this.prefix}${parts.join(":")}`;
-  }
-
-  // Hot tier (5s TTL)
-  async setHot<T>(type: string, id: string, data: T): Promise<void> {
-    const key = this.key(["hot", type, id]);
-    await this.client.setEx(key, 5, JSON.stringify(data));
-  }
-
-  async getHot<T>(type: string, id: string): Promise<T | null> {
-    const key = this.key(["hot", type, id]);
-    const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
-  }
-
-  // Warm tier (configurable TTL, default 60s)
-  async setWarm<T>(
-    type: string,
-    id: string,
-    data: T,
-    ttl: number = 60,
-  ): Promise<void> {
-    const key = this.key(["warm", type, id]);
-    await this.client.setEx(key, ttl, JSON.stringify(data));
-  }
-
-  async getWarm<T>(type: string, id: string): Promise<T | null> {
-    const key = this.key(["warm", type, id]);
-    const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
-  }
-
-  // Cold tier (configurable TTL, default 1 hour)
-  async setCold<T>(
-    type: string,
-    id: string,
-    data: T,
-    ttl: number = 3600,
-  ): Promise<void> {
-    const key = this.key(["cold", type, id]);
-    await this.client.setEx(key, ttl, JSON.stringify(data));
-  }
-
-  async getCold<T>(type: string, id: string): Promise<T | null> {
-    const key = this.key(["cold", type, id]);
-    const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
-  }
-
-  // Analysis cache (15-30 min TTL)
-  async setAnalysis<T>(
-    analysisType: string,
+  async setOptionChain(
     symbol: string,
-    params: string,
-    data: T,
-    ttl: number = 900,
+    chain: OptionChain,
+    expiration?: string
   ): Promise<void> {
-    const key = this.key(["analysis", analysisType, symbol, params]);
-    await this.client.setEx(key, ttl, JSON.stringify(data));
+    const key = expiration
+      ? `chain:${symbol}:${expiration}`
+      : `chain:${symbol}:all`;
+    await this.kv.put(key, JSON.stringify(chain), {
+      expirationTtl: 300, // 5 minutes
+    });
   }
 
-  async getAnalysis<T>(
-    analysisType: string,
-    symbol: string,
-    params: string,
-  ): Promise<T | null> {
-    const key = this.key(["analysis", analysisType, symbol, params]);
-    const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
+  // Analysis results (15m TTL)
+  async getAnalysis(userId: string, symbol: string): Promise<Analysis | null> {
+    return this.kv.get(`user:${userId}:analysis:${symbol}`, "json");
   }
 
-  // Session cache (24h TTL)
-  async setSession<T>(type: string, id: string, data: T): Promise<void> {
-    const key = this.key(["session", type, id]);
-    await this.client.setEx(key, 86400, JSON.stringify(data));
-  }
-
-  async getSession<T>(type: string, id: string): Promise<T | null> {
-    const key = this.key(["session", type, id]);
-    const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
-  }
-
-  // Generic get with fallback
-  async getOrSet<T>(
-    tier: "hot" | "warm" | "cold",
-    type: string,
-    id: string,
-    fetcher: () => Promise<T>,
-    ttl?: number,
-  ): Promise<T> {
-    const getter =
-      tier === "hot"
-        ? this.getHot
-        : tier === "warm"
-          ? this.getWarm
-          : this.getCold;
-    const setter =
-      tier === "hot"
-        ? this.setHot
-        : tier === "warm"
-          ? this.setWarm
-          : this.setCold;
-
-    const cached = await getter.call(this, type, id);
-    if (cached) return cached as T;
-
-    const data = await fetcher();
-    await setter.call(this, type, id, data, ttl);
-    return data;
-  }
-
-  // Invalidation
-  async invalidate(pattern: string): Promise<void> {
-    const fullPattern = this.key([pattern]);
-    const keys = await this.client.keys(fullPattern);
-    if (keys.length > 0) {
-      await this.client.del(keys);
-    }
-  }
-
-  // Pub/Sub
-  async publish(channel: string, message: unknown): Promise<void> {
-    await this.client.publish(
-      `${this.prefix}${channel}`,
-      JSON.stringify(message),
+  async setAnalysis(userId: string, symbol: string, analysis: Analysis): Promise<void> {
+    await this.kv.put(
+      `user:${userId}:analysis:${symbol}`,
+      JSON.stringify(analysis),
+      { expirationTtl: 900 } // 15 minutes
     );
   }
 
-  async subscribe(
-    channel: string,
-    callback: (message: unknown) => void,
-  ): Promise<void> {
-    const subscriber = this.client.duplicate();
-    await subscriber.connect();
+  // Company info (cold tier - 1 day TTL)
+  async getCompanyInfo(symbol: string): Promise<CompanyInfo | null> {
+    return this.kv.get(`company:${symbol}`, "json");
+  }
 
-    await subscriber.subscribe(`${this.prefix}${channel}`, (message) => {
-      callback(JSON.parse(message));
+  async setCompanyInfo(symbol: string, info: CompanyInfo): Promise<void> {
+    await this.kv.put(`company:${symbol}`, JSON.stringify(info), {
+      expirationTtl: 86400, // 24 hours
     });
   }
-}
 
-export async function createRedisClient(
-  config?: Partial<CacheConfig>,
-): Promise<RedisCache> {
-  const cache = new RedisCache({
-    url: config?.url || process.env.REDIS_URL || "redis://localhost:6379",
-    prefix: config?.prefix || "ttai:",
-  });
-  await cache.connect();
-  return cache;
-}
-```
+  // Batch operations
+  async getQuotes(symbols: string[]): Promise<Map<string, Quote>> {
+    const results = new Map<string, Quote>();
 
-### Python Redis Client
+    // KV doesn't support batch get, so we parallelize
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        const quote = await this.getQuote(symbol);
+        if (quote) results.set(symbol, quote);
+      })
+    );
 
-```python
-# db/redis.py
-import json
-import os
-from typing import TypeVar, Optional, Callable, Awaitable, Any
-import redis.asyncio as redis
-
-T = TypeVar("T")
-
-class RedisCache:
-    """Async Redis cache client for Python workers."""
-
-    def __init__(self, url: Optional[str] = None, prefix: str = "ttai:"):
-        self.url = url or os.environ.get("REDIS_URL", "redis://localhost:6379")
-        self.prefix = prefix
-        self._client: Optional[redis.Redis] = None
-
-    async def connect(self) -> None:
-        self._client = await redis.from_url(self.url)
-
-    async def disconnect(self) -> None:
-        if self._client:
-            await self._client.close()
-
-    @property
-    def client(self) -> redis.Redis:
-        if self._client is None:
-            raise RuntimeError("Redis client not connected")
-        return self._client
-
-    def _key(self, *parts: str) -> str:
-        return f"{self.prefix}{':'.join(parts)}"
-
-    # Hot tier
-    async def set_hot(self, type_: str, id_: str, data: Any) -> None:
-        key = self._key("hot", type_, id_)
-        await self.client.setex(key, 5, json.dumps(data, default=str))
-
-    async def get_hot(self, type_: str, id_: str) -> Optional[Any]:
-        key = self._key("hot", type_, id_)
-        data = await self.client.get(key)
-        return json.loads(data) if data else None
-
-    # Warm tier
-    async def set_warm(
-        self, type_: str, id_: str, data: Any, ttl: int = 60
-    ) -> None:
-        key = self._key("warm", type_, id_)
-        await self.client.setex(key, ttl, json.dumps(data, default=str))
-
-    async def get_warm(self, type_: str, id_: str) -> Optional[Any]:
-        key = self._key("warm", type_, id_)
-        data = await self.client.get(key)
-        return json.loads(data) if data else None
-
-    # Cold tier
-    async def set_cold(
-        self, type_: str, id_: str, data: Any, ttl: int = 3600
-    ) -> None:
-        key = self._key("cold", type_, id_)
-        await self.client.setex(key, ttl, json.dumps(data, default=str))
-
-    async def get_cold(self, type_: str, id_: str) -> Optional[Any]:
-        key = self._key("cold", type_, id_)
-        data = await self.client.get(key)
-        return json.loads(data) if data else None
-
-    # Analysis cache
-    async def set_analysis(
-        self,
-        analysis_type: str,
-        symbol: str,
-        params: str,
-        data: Any,
-        ttl: int = 900,
-    ) -> None:
-        key = self._key("analysis", analysis_type, symbol, params)
-        await self.client.setex(key, ttl, json.dumps(data, default=str))
-
-    async def get_analysis(
-        self, analysis_type: str, symbol: str, params: str
-    ) -> Optional[Any]:
-        key = self._key("analysis", analysis_type, symbol, params)
-        data = await self.client.get(key)
-        return json.loads(data) if data else None
-
-    # Generic get-or-set
-    async def get_or_set(
-        self,
-        tier: str,
-        type_: str,
-        id_: str,
-        fetcher: Callable[[], Awaitable[T]],
-        ttl: Optional[int] = None,
-    ) -> T:
-        if tier == "hot":
-            cached = await self.get_hot(type_, id_)
-        elif tier == "warm":
-            cached = await self.get_warm(type_, id_)
-        else:
-            cached = await self.get_cold(type_, id_)
-
-        if cached is not None:
-            return cached
-
-        data = await fetcher()
-
-        if tier == "hot":
-            await self.set_hot(type_, id_, data)
-        elif tier == "warm":
-            await self.set_warm(type_, id_, data, ttl or 60)
-        else:
-            await self.set_cold(type_, id_, data, ttl or 3600)
-
-        return data
-
-    # Pub/Sub
-    async def publish(self, channel: str, message: Any) -> None:
-        await self.client.publish(
-            f"{self.prefix}{channel}",
-            json.dumps(message, default=str),
-        )
-
-    async def subscribe(
-        self,
-        channel: str,
-        callback: Callable[[Any], Awaitable[None]],
-    ) -> None:
-        pubsub = self.client.pubsub()
-        await pubsub.subscribe(f"{self.prefix}{channel}")
-
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                data = json.loads(message["data"])
-                await callback(data)
-```
-
-## Real-Time Data Flow via Redis Pub/Sub
-
-### Streaming Worker
-
-```python
-# workers/streaming_worker.py
-import asyncio
-from db.redis import RedisCache
-from services.tastytrade import TastyTradeClient
-
-class StreamingWorker:
-    """Worker that streams real-time data and publishes to Redis."""
-
-    def __init__(self, redis: RedisCache, tt_client: TastyTradeClient):
-        self.redis = redis
-        self.tt_client = tt_client
-        self._symbols: set[str] = set()
-        self._shutdown = False
-
-    async def add_symbols(self, symbols: list[str]) -> None:
-        """Add symbols to the streaming set."""
-        self._symbols.update(symbols)
-
-    async def remove_symbols(self, symbols: list[str]) -> None:
-        """Remove symbols from the streaming set."""
-        self._symbols -= set(symbols)
-
-    async def run(self) -> None:
-        """Main streaming loop."""
-        while not self._shutdown:
-            if not self._symbols:
-                await asyncio.sleep(1)
-                continue
-
-            try:
-                # Stream quotes for all symbols
-                async for quote in self.tt_client.stream_quotes(list(self._symbols)):
-                    # Update hot cache
-                    await self.redis.set_hot("quote", quote.symbol, {
-                        "symbol": quote.symbol,
-                        "price": quote.price,
-                        "bid": quote.bid,
-                        "ask": quote.ask,
-                        "timestamp": quote.timestamp,
-                    })
-
-                    # Publish to channel
-                    await self.redis.publish(f"quotes:{quote.symbol}", {
-                        "symbol": quote.symbol,
-                        "price": quote.price,
-                    })
-
-            except Exception as e:
-                print(f"Streaming error: {e}")
-                await asyncio.sleep(5)  # Reconnect delay
-
-    async def shutdown(self) -> None:
-        self._shutdown = True
-```
-
-### MCP Server Subscription
-
-```typescript
-// src/resources/market-data.ts
-import { RedisCache } from "../cache/redis";
-
-export class MarketDataResource {
-  constructor(private cache: RedisCache) {}
-
-  async subscribeToQuotes(
-    symbols: string[],
-    callback: (quote: QuoteData) => void,
-  ): Promise<void> {
-    for (const symbol of symbols) {
-      await this.cache.subscribe(`quotes:${symbol}`, (data) => {
-        callback(data as QuoteData);
-      });
-    }
-  }
-
-  async getLatestQuote(symbol: string): Promise<QuoteData | null> {
-    return this.cache.getHot<QuoteData>("quote", symbol);
+    return results;
   }
 }
 ```
 
-## PostgreSQL Schema
+## Cloudflare D1 (SQLite Database)
 
-### Database Structure
+### Multi-Tenant Schema
+
+All tables include `user_id` for row-level isolation:
 
 ```sql
--- migrations/20240115_000001_initial_schema.sql
+-- schema.sql
+
+-- Users (from TastyTrade OAuth)
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,                 -- TastyTrade account ID (external-id)
+    email TEXT,
+    name TEXT,
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch())
+);
+
+-- Sessions (JWT session tracking)
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,                 -- JWT ID (jti claim)
+    user_id TEXT NOT NULL,               -- TastyTrade account ID
+    created_at INTEGER DEFAULT (unixepoch()),
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER,                  -- NULL if active, timestamp if revoked
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX idx_sessions_user ON sessions(user_id);
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+
+-- User OAuth tokens (encrypted)
+CREATE TABLE user_oauth_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,               -- TastyTrade account ID
+    provider TEXT NOT NULL,              -- 'tastytrade'
+    access_token TEXT NOT NULL,          -- Encrypted
+    refresh_token TEXT NOT NULL,         -- Encrypted
+    expires_at INTEGER NOT NULL,         -- Unix timestamp
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(user_id, provider),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- User preferences
+CREATE TABLE user_preferences (
+    user_id TEXT PRIMARY KEY,
+    default_strategy TEXT DEFAULT 'csp',
+    morning_alert INTEGER DEFAULT 0,
+    eod_summary INTEGER DEFAULT 0,
+    notification_channels TEXT DEFAULT '[]', -- JSON array
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch())
+);
+
+-- Positions (synced from TastyTrade)
+CREATE TABLE positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    average_cost REAL NOT NULL,
+    position_type TEXT NOT NULL,          -- 'stock', 'option'
+    option_type TEXT,                     -- 'call', 'put'
+    strike REAL,
+    expiration TEXT,
+    status TEXT DEFAULT 'open',           -- 'open', 'closed'
+    opened_at INTEGER,
+    closed_at INTEGER,
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch())
+);
+
+CREATE INDEX idx_positions_user ON positions(user_id);
+CREATE INDEX idx_positions_user_status ON positions(user_id, status);
 
 -- Analysis history
-CREATE TABLE analysis_history (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    symbol VARCHAR(10) NOT NULL,
-    analysis_type VARCHAR(50) NOT NULL,  -- 'chart', 'options', 'research', 'full'
-    params JSONB,
-    result JSONB NOT NULL,
-    recommendation VARCHAR(20),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    type TEXT NOT NULL,                   -- 'chart', 'options', 'full'
+    result TEXT NOT NULL,                 -- JSON
+    recommendation TEXT,                  -- 'select', 'reject', 'neutral'
+    workflow_id TEXT,
+    created_at INTEGER DEFAULT (unixepoch())
 );
 
-CREATE INDEX idx_analysis_symbol ON analysis_history(symbol);
-CREATE INDEX idx_analysis_type ON analysis_history(analysis_type);
-CREATE INDEX idx_analysis_created ON analysis_history(created_at);
+CREATE INDEX idx_analyses_user ON analyses(user_id);
+CREATE INDEX idx_analyses_user_symbol ON analyses(user_id, symbol);
+
+-- Screener configurations
+CREATE TABLE screeners (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    type TEXT NOT NULL,                   -- 'stock', 'csp'
+    criteria TEXT NOT NULL,               -- JSON
+    auto_run INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(user_id, name)
+);
+
+CREATE INDEX idx_screeners_user ON screeners(user_id);
 
 -- Screener results
-CREATE TABLE screener_runs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    screener_id VARCHAR(100),
-    screener_type VARCHAR(50) NOT NULL,  -- 'stock', 'csp'
-    params JSONB NOT NULL,
-    candidates_found INTEGER NOT NULL,
-    results JSONB NOT NULL,
-    run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE screener_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    screener_id INTEGER,
+    criteria TEXT NOT NULL,               -- JSON (snapshot)
+    results TEXT NOT NULL,                -- JSON
+    created_at INTEGER DEFAULT (unixepoch()),
+    FOREIGN KEY (screener_id) REFERENCES screeners(id)
 );
 
-CREATE INDEX idx_screener_id ON screener_runs(screener_id);
-CREATE INDEX idx_screener_run_at ON screener_runs(run_at);
+CREATE INDEX idx_screener_results_user ON screener_results(user_id);
 
--- Alert configurations
-CREATE TABLE alert_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL,
-    alert_type VARCHAR(50) NOT NULL,  -- 'price', 'news', 'earnings', 'assignment_risk'
-    symbol VARCHAR(10),
-    conditions JSONB NOT NULL,
-    channels JSONB NOT NULL,  -- ['discord', 'email', 'slack']
-    enabled BOOLEAN DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- Alerts
+CREATE TABLE alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    alert_type TEXT NOT NULL,             -- 'price', 'delta', 'dte', 'news'
+    condition TEXT NOT NULL,              -- 'above', 'below', etc.
+    threshold REAL,
+    message_template TEXT,
+    status TEXT DEFAULT 'active',         -- 'active', 'triggered', 'cancelled'
+    triggered_at INTEGER,
+    created_at INTEGER DEFAULT (unixepoch())
 );
 
-CREATE INDEX idx_alert_symbol ON alert_configs(symbol);
-CREATE INDEX idx_alert_type ON alert_configs(alert_type);
-CREATE INDEX idx_alert_enabled ON alert_configs(enabled);
-
--- Alert history (triggered alerts)
-CREATE TABLE alert_history (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    config_id UUID REFERENCES alert_configs(id),
-    symbol VARCHAR(10),
-    alert_type VARCHAR(50) NOT NULL,
-    message TEXT NOT NULL,
-    details JSONB,
-    channels_notified JSONB,
-    triggered_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX idx_alert_history_config ON alert_history(config_id);
-CREATE INDEX idx_alert_history_triggered ON alert_history(triggered_at);
+CREATE INDEX idx_alerts_user ON alerts(user_id);
+CREATE INDEX idx_alerts_active ON alerts(user_id, status) WHERE status = 'active';
 
 -- Watchlists
 CREATE TABLE watchlists (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT,
-    symbols JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    symbols TEXT NOT NULL,                -- JSON array
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(user_id, name)
 );
 
--- Saved screeners
-CREATE TABLE saved_screeners (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT,
-    screener_type VARCHAR(50) NOT NULL,
-    criteria JSONB NOT NULL,
-    schedule VARCHAR(100),  -- cron expression if scheduled
-    notify_channels JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Trade journal (for tracking actual trades)
-CREATE TABLE trade_journal (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    symbol VARCHAR(10) NOT NULL,
-    strategy VARCHAR(100) NOT NULL,
-    legs JSONB NOT NULL,
-    entry_date DATE NOT NULL,
-    entry_price DECIMAL(10, 2) NOT NULL,
-    exit_date DATE,
-    exit_price DECIMAL(10, 2),
-    pnl DECIMAL(10, 2),
-    pnl_percent DECIMAL(6, 2),
-    notes TEXT,
-    analysis_id UUID REFERENCES analysis_history(id),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX idx_trade_symbol ON trade_journal(symbol);
-CREATE INDEX idx_trade_entry ON trade_journal(entry_date);
+CREATE INDEX idx_watchlists_user ON watchlists(user_id);
 ```
 
-### Migration Strategy
-
-Using Alembic (Python) since Python activities are the primary data producers.
-
-#### Alembic Configuration
-
-```python
-# db/migrations/env.py
-import asyncio
-from logging.config import fileConfig
-from sqlalchemy import pool
-from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
-from alembic import context
-
-config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-target_metadata = None  # Use raw SQL migrations
-
-def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
-
-    with context.begin_transaction():
-        context.run_migrations()
-
-def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
-    with context.begin_transaction():
-        context.run_migrations()
-
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode."""
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-
-    await connectable.dispose()
-
-def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
-
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
-```
-
-#### Migration Naming Convention
-
-```
-YYYYMMDD_HHMMSS_description.py
-
-Examples:
-20240115_000001_initial_schema.py
-20240115_120000_add_screener_tables.py
-20240116_090000_add_trade_journal.py
-```
-
-#### Running Migrations
-
-```bash
-# Create a new migration
-alembic revision -m "add_new_table"
-
-# Run migrations
-alembic upgrade head
-
-# Rollback
-alembic downgrade -1
-```
-
-### Python Database Client
-
-```python
-# db/postgres.py
-import os
-from typing import Optional, List, Dict, Any
-from contextlib import asynccontextmanager
-import asyncpg
-
-class PostgresClient:
-    """Async PostgreSQL client for Python workers."""
-
-    def __init__(self, dsn: Optional[str] = None):
-        self.dsn = dsn or os.environ.get(
-            "DATABASE_URL",
-            "postgresql://ttai:ttai@localhost:5432/ttai"
-        )
-        self._pool: Optional[asyncpg.Pool] = None
-
-    async def connect(self) -> None:
-        self._pool = await asyncpg.create_pool(
-            self.dsn,
-            min_size=2,
-            max_size=10,
-        )
-
-    async def disconnect(self) -> None:
-        if self._pool:
-            await self._pool.close()
-
-    @property
-    def pool(self) -> asyncpg.Pool:
-        if self._pool is None:
-            raise RuntimeError("Database not connected")
-        return self._pool
-
-    @asynccontextmanager
-    async def connection(self):
-        async with self.pool.acquire() as conn:
-            yield conn
-
-    # Analysis history
-    async def save_analysis(
-        self,
-        symbol: str,
-        analysis_type: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
-        recommendation: Optional[str] = None,
-    ) -> str:
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO analysis_history (symbol, analysis_type, params, result, recommendation)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-                """,
-                symbol,
-                analysis_type,
-                params,
-                result,
-                recommendation,
-            )
-            return str(row["id"])
-
-    async def get_analysis_history(
-        self,
-        symbol: str,
-        analysis_type: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        async with self.connection() as conn:
-            if analysis_type:
-                rows = await conn.fetch(
-                    """
-                    SELECT * FROM analysis_history
-                    WHERE symbol = $1 AND analysis_type = $2
-                    ORDER BY created_at DESC
-                    LIMIT $3
-                    """,
-                    symbol,
-                    analysis_type,
-                    limit,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT * FROM analysis_history
-                    WHERE symbol = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                    """,
-                    symbol,
-                    limit,
-                )
-            return [dict(row) for row in rows]
-
-    # Screener results
-    async def save_screener_run(
-        self,
-        screener_id: Optional[str],
-        screener_type: str,
-        params: Dict[str, Any],
-        results: List[Dict[str, Any]],
-    ) -> str:
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO screener_runs (screener_id, screener_type, params, candidates_found, results)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-                """,
-                screener_id,
-                screener_type,
-                params,
-                len(results),
-                results,
-            )
-            return str(row["id"])
-
-    # Watchlists
-    async def get_watchlist(self, name: str) -> Optional[Dict[str, Any]]:
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM watchlists WHERE name = $1",
-                name,
-            )
-            return dict(row) if row else None
-
-    async def update_watchlist(
-        self,
-        name: str,
-        symbols: List[str],
-    ) -> None:
-        async with self.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO watchlists (name, symbols)
-                VALUES ($1, $2)
-                ON CONFLICT (name) DO UPDATE
-                SET symbols = $2, updated_at = NOW()
-                """,
-                name,
-                symbols,
-            )
-
-    # Alert configs
-    async def get_enabled_alerts(
-        self,
-        alert_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        async with self.connection() as conn:
-            if alert_type:
-                rows = await conn.fetch(
-                    """
-                    SELECT * FROM alert_configs
-                    WHERE enabled = true AND alert_type = $1
-                    """,
-                    alert_type,
-                )
-            else:
-                rows = await conn.fetch(
-                    "SELECT * FROM alert_configs WHERE enabled = true"
-                )
-            return [dict(row) for row in rows]
-
-    async def save_alert_history(
-        self,
-        config_id: Optional[str],
-        symbol: Optional[str],
-        alert_type: str,
-        message: str,
-        details: Dict[str, Any],
-        channels_notified: List[str],
-    ) -> str:
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO alert_history (config_id, symbol, alert_type, message, details, channels_notified)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id
-                """,
-                config_id,
-                symbol,
-                alert_type,
-                message,
-                details,
-                channels_notified,
-            )
-            return str(row["id"])
-```
-
-### TypeScript Database Access
-
-For reads and alert/watchlist writes from the MCP server:
+### D1 Operations
 
 ```typescript
-// src/db/postgres.ts
-import { Pool, PoolClient } from "pg";
+// src/services/database.ts
+export class DatabaseService {
+  constructor(
+    private db: D1Database,
+    private userId: string
+  ) {}
 
-export class PostgresClient {
-  private pool: Pool;
+  // Positions
+  async getPositions(status: "open" | "closed" | "all" = "open"): Promise<Position[]> {
+    let query = "SELECT * FROM positions WHERE user_id = ?";
+    const params: any[] = [this.userId];
 
-  constructor(connectionString?: string) {
-    this.pool = new Pool({
-      connectionString:
-        connectionString ||
-        process.env.DATABASE_URL ||
-        "postgresql://ttai:ttai@localhost:5432/ttai",
-      max: 10,
-      idleTimeoutMillis: 30000,
+    if (status !== "all") {
+      query += " AND status = ?";
+      params.push(status);
+    }
+
+    const result = await this.db.prepare(query).bind(...params).all();
+    return result.results as Position[];
+  }
+
+  async upsertPosition(position: Omit<Position, "id">): Promise<void> {
+    await this.db.prepare(`
+      INSERT INTO positions (user_id, symbol, quantity, average_cost, position_type,
+                            option_type, strike, expiration, status, opened_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, symbol, option_type, strike, expiration)
+      DO UPDATE SET quantity = excluded.quantity,
+                    average_cost = excluded.average_cost,
+                    status = excluded.status,
+                    updated_at = unixepoch()
+    `).bind(
+      this.userId,
+      position.symbol,
+      position.quantity,
+      position.averageCost,
+      position.positionType,
+      position.optionType,
+      position.strike,
+      position.expiration,
+      position.status,
+      position.openedAt
+    ).run();
+  }
+
+  // Analyses
+  async saveAnalysis(analysis: Omit<Analysis, "id" | "userId">): Promise<number> {
+    const result = await this.db.prepare(`
+      INSERT INTO analyses (user_id, symbol, type, result, recommendation, workflow_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      this.userId,
+      analysis.symbol,
+      analysis.type,
+      JSON.stringify(analysis.result),
+      analysis.recommendation,
+      analysis.workflowId
+    ).run();
+
+    return result.meta.last_row_id;
+  }
+
+  async getAnalyses(limit = 20, symbol?: string): Promise<Analysis[]> {
+    let query = "SELECT * FROM analyses WHERE user_id = ?";
+    const params: any[] = [this.userId];
+
+    if (symbol) {
+      query += " AND symbol = ?";
+      params.push(symbol);
+    }
+
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const result = await this.db.prepare(query).bind(...params).all();
+    return result.results.map((row: any) => ({
+      ...row,
+      result: JSON.parse(row.result),
+    })) as Analysis[];
+  }
+
+  // Screeners
+  async getScreeners(): Promise<Screener[]> {
+    const result = await this.db.prepare(
+      "SELECT * FROM screeners WHERE user_id = ? ORDER BY name"
+    ).bind(this.userId).all();
+
+    return result.results.map((row: any) => ({
+      ...row,
+      criteria: JSON.parse(row.criteria),
+    })) as Screener[];
+  }
+
+  async saveScreener(screener: Omit<Screener, "id">): Promise<number> {
+    const result = await this.db.prepare(`
+      INSERT INTO screeners (user_id, name, description, type, criteria, auto_run)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, name) DO UPDATE SET
+        description = excluded.description,
+        type = excluded.type,
+        criteria = excluded.criteria,
+        auto_run = excluded.auto_run,
+        updated_at = unixepoch()
+    `).bind(
+      this.userId,
+      screener.name,
+      screener.description,
+      screener.type,
+      JSON.stringify(screener.criteria),
+      screener.autoRun ? 1 : 0
+    ).run();
+
+    return result.meta.last_row_id;
+  }
+
+  // Alerts
+  async getActiveAlerts(): Promise<Alert[]> {
+    const result = await this.db.prepare(
+      "SELECT * FROM alerts WHERE user_id = ? AND status = 'active'"
+    ).bind(this.userId).all();
+
+    return result.results as Alert[];
+  }
+
+  async createAlert(alert: Omit<Alert, "id" | "status" | "triggeredAt">): Promise<number> {
+    const result = await this.db.prepare(`
+      INSERT INTO alerts (user_id, symbol, alert_type, condition, threshold, message_template)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      this.userId,
+      alert.symbol,
+      alert.alertType,
+      alert.condition,
+      alert.threshold,
+      alert.messageTemplate
+    ).run();
+
+    return result.meta.last_row_id;
+  }
+
+  async triggerAlert(alertId: number): Promise<void> {
+    await this.db.prepare(`
+      UPDATE alerts
+      SET status = 'triggered', triggered_at = unixepoch()
+      WHERE id = ? AND user_id = ?
+    `).bind(alertId, this.userId).run();
+  }
+}
+```
+
+## Cloudflare R2 (Object Storage)
+
+### Storage Structure
+
+```
+ttai-storage/
+├── knowledge/                  # Knowledge base documents
+│   ├── options/
+│   │   ├── strategies.md
+│   │   └── greeks.md
+│   └── trading/
+│       └── risk-management.md
+│
+├── users/{user_id}/           # User-specific storage
+│   ├── exports/               # Exported reports
+│   │   └── analysis-2024-01-15.pdf
+│   └── uploads/               # User uploads
+│
+├── embeddings/                # Vector embedding data
+│   └── knowledge/
+│       └── chunks.json
+│
+└── backups/                   # D1 backups
+    └── d1-backup-2024-01-15.sql
+```
+
+### R2 Operations
+
+```typescript
+// src/services/storage.ts
+export class StorageService {
+  constructor(
+    private r2: R2Bucket,
+    private userId?: string
+  ) {}
+
+  // Knowledge base
+  async getKnowledgeDoc(path: string): Promise<string | null> {
+    const object = await this.r2.get(`knowledge/${path}`);
+    if (!object) return null;
+    return object.text();
+  }
+
+  async listKnowledgeDocs(prefix?: string): Promise<string[]> {
+    const listed = await this.r2.list({
+      prefix: prefix ? `knowledge/${prefix}` : "knowledge/",
+    });
+    return listed.objects.map((obj) => obj.key);
+  }
+
+  // User exports
+  async saveExport(filename: string, content: ArrayBuffer): Promise<string> {
+    if (!this.userId) throw new Error("User ID required for exports");
+
+    const key = `users/${this.userId}/exports/${filename}`;
+    await this.r2.put(key, content, {
+      httpMetadata: {
+        contentType: this.getContentType(filename),
+      },
+    });
+
+    return key;
+  }
+
+  async getExport(filename: string): Promise<ArrayBuffer | null> {
+    if (!this.userId) throw new Error("User ID required for exports");
+
+    const object = await this.r2.get(`users/${this.userId}/exports/${filename}`);
+    if (!object) return null;
+    return object.arrayBuffer();
+  }
+
+  async listExports(): Promise<ExportFile[]> {
+    if (!this.userId) throw new Error("User ID required");
+
+    const listed = await this.r2.list({
+      prefix: `users/${this.userId}/exports/`,
+    });
+
+    return listed.objects.map((obj) => ({
+      name: obj.key.split("/").pop() || "",
+      size: obj.size,
+      uploaded: obj.uploaded,
+    }));
+  }
+
+  private getContentType(filename: string): string {
+    const ext = filename.split(".").pop()?.toLowerCase();
+    const types: Record<string, string> = {
+      pdf: "application/pdf",
+      csv: "text/csv",
+      json: "application/json",
+      md: "text/markdown",
+    };
+    return types[ext || ""] || "application/octet-stream";
+  }
+}
+```
+
+## Cloudflare Queues (Async Processing)
+
+### Queue Definitions
+
+```toml
+# wrangler.toml
+
+# Task queue (producer)
+[[queues.producers]]
+binding = "TASK_QUEUE"
+queue = "ttai-tasks"
+
+# Task queue (consumer)
+[[queues.consumers]]
+queue = "ttai-tasks"
+max_batch_size = 10
+max_batch_timeout = 30
+
+# Notification queue
+[[queues.producers]]
+binding = "NOTIFICATION_QUEUE"
+queue = "ttai-notifications"
+
+[[queues.consumers]]
+queue = "ttai-notifications"
+max_batch_size = 20
+max_batch_timeout = 5
+```
+
+### Queue Message Types
+
+```typescript
+// src/types/queue.ts
+export type QueueMessage =
+  | AnalysisCompleteMessage
+  | AlertTriggeredMessage
+  | ScreenerCompleteMessage
+  | NotificationMessage;
+
+export interface AnalysisCompleteMessage {
+  type: "analysis_complete";
+  userId: string;
+  symbol: string;
+  recommendation: string;
+  workflowId: string;
+}
+
+export interface AlertTriggeredMessage {
+  type: "alert_triggered";
+  userId: string;
+  alertId: number;
+  symbol: string;
+  condition: string;
+  currentValue: number;
+}
+
+export interface ScreenerCompleteMessage {
+  type: "screener_complete";
+  userId: string;
+  screenerId: number;
+  resultCount: number;
+}
+
+export interface NotificationMessage {
+  type: "notification";
+  userId: string;
+  channel: "discord" | "email" | "push";
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+}
+```
+
+### Queue Consumer
+
+```typescript
+// src/index.ts
+export default {
+  // ... fetch handler
+
+  async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await processMessage(message.body, env);
+        message.ack();
+      } catch (error) {
+        console.error("Queue message failed:", error);
+        message.retry();
+      }
+    }
+  },
+};
+
+async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
+  switch (msg.type) {
+    case "analysis_complete":
+      await handleAnalysisComplete(msg, env);
+      break;
+    case "alert_triggered":
+      await handleAlertTriggered(msg, env);
+      break;
+    case "notification":
+      await sendNotification(msg, env);
+      break;
+  }
+}
+
+async function handleAnalysisComplete(
+  msg: AnalysisCompleteMessage,
+  env: Env
+): Promise<void> {
+  // Get user preferences
+  const prefs = await env.DB.prepare(
+    "SELECT notification_channels FROM user_preferences WHERE user_id = ?"
+  ).bind(msg.userId).first();
+
+  if (!prefs) return;
+
+  const channels = JSON.parse(prefs.notification_channels || "[]");
+
+  // Queue notification for each channel
+  for (const channel of channels) {
+    await env.NOTIFICATION_QUEUE.send({
+      type: "notification",
+      userId: msg.userId,
+      channel,
+      title: `Analysis Complete: ${msg.symbol}`,
+      body: `Recommendation: ${msg.recommendation}`,
+      data: { symbol: msg.symbol, workflowId: msg.workflowId },
     });
   }
-
-  async query<T>(text: string, params?: unknown[]): Promise<T[]> {
-    const result = await this.pool.query(text, params);
-    return result.rows;
-  }
-
-  async queryOne<T>(text: string, params?: unknown[]): Promise<T | null> {
-    const result = await this.pool.query(text, params);
-    return result.rows[0] || null;
-  }
-
-  // Watchlists
-  async getWatchlist(name: string): Promise<Watchlist | null> {
-    return this.queryOne<Watchlist>(
-      "SELECT * FROM watchlists WHERE name = $1",
-      [name],
-    );
-  }
-
-  async listWatchlists(): Promise<Watchlist[]> {
-    return this.query<Watchlist>("SELECT * FROM watchlists ORDER BY name");
-  }
-
-  async updateWatchlist(name: string, symbols: string[]): Promise<void> {
-    await this.query(
-      `INSERT INTO watchlists (name, symbols)
-       VALUES ($1, $2)
-       ON CONFLICT (name) DO UPDATE
-       SET symbols = $2, updated_at = NOW()`,
-      [name, JSON.stringify(symbols)],
-    );
-  }
-
-  // Alert configs
-  async getAlertConfigs(enabled?: boolean): Promise<AlertConfig[]> {
-    if (enabled !== undefined) {
-      return this.query<AlertConfig>(
-        "SELECT * FROM alert_configs WHERE enabled = $1",
-        [enabled],
-      );
-    }
-    return this.query<AlertConfig>("SELECT * FROM alert_configs");
-  }
-
-  async createAlertConfig(config: Partial<AlertConfig>): Promise<string> {
-    const result = await this.queryOne<{ id: string }>(
-      `INSERT INTO alert_configs (name, alert_type, symbol, conditions, channels)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [
-        config.name,
-        config.alertType,
-        config.symbol,
-        JSON.stringify(config.conditions),
-        JSON.stringify(config.channels),
-      ],
-    );
-    return result!.id;
-  }
-
-  // Analysis history (read-only from TypeScript)
-  async getAnalysisHistory(
-    symbol: string,
-    limit: number = 10,
-  ): Promise<AnalysisRecord[]> {
-    return this.query<AnalysisRecord>(
-      `SELECT * FROM analysis_history
-       WHERE symbol = $1
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [symbol, limit],
-    );
-  }
-
-  // Screener results (read-only from TypeScript)
-  async getScreenerRuns(
-    screenerId?: string,
-    limit: number = 10,
-  ): Promise<ScreenerRun[]> {
-    if (screenerId) {
-      return this.query<ScreenerRun>(
-        `SELECT * FROM screener_runs
-         WHERE screener_id = $1
-         ORDER BY run_at DESC
-         LIMIT $2`,
-        [screenerId, limit],
-      );
-    }
-    return this.query<ScreenerRun>(
-      `SELECT * FROM screener_runs
-       ORDER BY run_at DESC
-       LIMIT $1`,
-      [limit],
-    );
-  }
-
-  async close(): Promise<void> {
-    await this.pool.end();
-  }
-}
-
-// Types
-interface Watchlist {
-  id: string;
-  name: string;
-  description?: string;
-  symbols: string[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface AlertConfig {
-  id: string;
-  name: string;
-  alertType: string;
-  symbol?: string;
-  conditions: Record<string, unknown>;
-  channels: string[];
-  enabled: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface AnalysisRecord {
-  id: string;
-  symbol: string;
-  analysisType: string;
-  params: Record<string, unknown>;
-  result: Record<string, unknown>;
-  recommendation?: string;
-  createdAt: Date;
-}
-
-interface ScreenerRun {
-  id: string;
-  screenerId?: string;
-  screenerType: string;
-  params: Record<string, unknown>;
-  candidatesFound: number;
-  results: Record<string, unknown>[];
-  runAt: Date;
 }
 ```
 
-## Data Access Patterns
+## Pub/Sub with Durable Objects
 
-### Read Path (MCP Server)
+For real-time updates, Durable Objects + WebSocket hibernation provides a pub/sub pattern:
 
 ```typescript
-// Example: Get quote with cache fallback
-async function getQuote(symbol: string): Promise<QuoteData> {
-  // 1. Try hot cache first
-  const cached = await redis.getHot<QuoteData>("quote", symbol);
-  if (cached) return cached;
+// src/durableObjects/pubsub.ts
+export class PubSubDO implements DurableObject {
+  private state: DurableObjectState;
+  private channels: Map<string, Set<WebSocket>> = new Map();
 
-  // 2. Start a Temporal workflow to fetch fresh data
-  const handle = await temporal.workflow.start(FetchQuoteWorkflow, {
-    taskQueue: "ttai-queue",
-    workflowId: `fetch-quote-${symbol}`,
-    args: [symbol],
-  });
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+  }
 
-  return await handle.result();
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/subscribe") {
+      return this.handleSubscribe(request);
+    }
+
+    if (url.pathname === "/publish") {
+      return this.handlePublish(request);
+    }
+
+    return new Response("Not Found", { status: 404 });
+  }
+
+  async handleSubscribe(request: Request): Promise<Response> {
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
+    }
+
+    const url = new URL(request.url);
+    const channels = url.searchParams.get("channels")?.split(",") || [];
+
+    const [client, server] = Object.values(new WebSocketPair());
+
+    // Use hibernation
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment({ channels });
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async handlePublish(request: Request): Promise<Response> {
+    const { channel, data } = await request.json<{
+      channel: string;
+      data: unknown;
+    }>();
+
+    const message = JSON.stringify({ channel, data, timestamp: Date.now() });
+
+    // Send to all WebSockets subscribed to this channel
+    for (const ws of this.state.getWebSockets()) {
+      const attachment = ws.deserializeAttachment() as { channels: string[] };
+      if (attachment.channels.includes(channel)) {
+        ws.send(message);
+      }
+    }
+
+    return new Response("ok");
+  }
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    // Automatic cleanup via hibernation
+  }
 }
 ```
 
-### Write Path (Python Workers)
+## Cross-References
 
-```python
-# Example: Save analysis result
-async def save_analysis_result(
-    symbol: str,
-    analysis_type: str,
-    result: dict,
-) -> None:
-    # 1. Save to PostgreSQL for persistence
-    await db.save_analysis(
-        symbol=symbol,
-        analysis_type=analysis_type,
-        params={},
-        result=result,
-        recommendation=result.get("recommendation"),
-    )
-
-    # 2. Cache in Redis for fast access
-    cache_key = f"{analysis_type}:{symbol}"
-    await redis.set_analysis(analysis_type, symbol, "latest", result)
-
-    # 3. Publish update notification
-    await redis.publish(f"analysis:{symbol}", {
-        "type": analysis_type,
-        "recommendation": result.get("recommendation"),
-    })
-```
-
-### Cache Invalidation
-
-```python
-# Invalidate on significant events
-async def on_earnings_released(symbol: str) -> None:
-    # Invalidate all warm/cold cache for the symbol
-    await redis.invalidate(f"warm:*:{symbol}")
-    await redis.invalidate(f"cold:*:{symbol}")
-    await redis.invalidate(f"analysis:*:{symbol}:*")
-```
+- [MCP Server Design](./01-mcp-server-design.md) - KV/D1 access patterns
+- [Background Tasks](./06-background-tasks.md) - Queue processing
+- [Knowledge Base](./07-knowledge-base.md) - R2 document storage
+- [Infrastructure](./08-infrastructure.md) - Binding configuration
