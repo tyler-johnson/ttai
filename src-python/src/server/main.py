@@ -4,6 +4,8 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import sys
+from pathlib import Path
 
 import uvicorn
 from mcp.server import Server
@@ -16,6 +18,7 @@ from starlette.routing import Mount, Route
 
 from src.auth.credentials import CredentialManager
 from src.server.config import ServerConfig
+from src.server.ssl import CertificateFetchError, CertificateManager
 from src.server.tools import register_tools
 from src.services.cache import CacheService
 from src.services.tastytrade import TastyTradeService
@@ -47,6 +50,7 @@ def create_server(cfg: ServerConfig) -> Server:
 
     # Store global reference for REST API
     _tastytrade_service = tastytrade_service
+    logger.debug(f"TastyTrade service created and stored: {_tastytrade_service}")
 
     # Register tools with services
     register_tools(server, tastytrade_service)
@@ -127,13 +131,21 @@ async def run_stdio(server: Server) -> None:
         )
 
 
-async def run_sse(server: Server, host: str, port: int) -> None:
-    """Run the server in SSE mode with HTTP transport.
+async def run_sse(
+    server: Server,
+    host: str,
+    port: int,
+    ssl_certfile: Path | None = None,
+    ssl_keyfile: Path | None = None,
+) -> None:
+    """Run the server in SSE mode with HTTP/HTTPS transport.
 
     Args:
         server: The MCP server instance
         host: Host to bind to
         port: Port to bind to
+        ssl_certfile: Path to SSL certificate file (for HTTPS)
+        ssl_keyfile: Path to SSL private key file (for HTTPS)
     """
     session_manager = StreamableHTTPSessionManager(app=server)
 
@@ -146,7 +158,7 @@ async def run_sse(server: Server, host: str, port: int) -> None:
     async def mcp_asgi_app(scope, receive, send):
         await session_manager.handle_request(scope, receive, send)
 
-    app = Starlette(
+    starlette_app = Starlette(
         lifespan=lifespan,
         routes=[
             # MCP streamable HTTP transport at /mcp
@@ -159,13 +171,25 @@ async def run_sse(server: Server, host: str, port: int) -> None:
         ],
     )
 
-    logger.info(f"Starting MCP server in HTTP mode at http://{host}:{port}/mcp")
+    # Middleware to normalize /mcp to /mcp/ (avoid 307 redirect)
+    async def app(scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/mcp":
+            scope = dict(scope)
+            scope["path"] = "/mcp/"
+        await starlette_app(scope, receive, send)
+
+    # Configure SSL if certificates provided
+    ssl_enabled = ssl_certfile is not None and ssl_keyfile is not None
+    protocol = "https" if ssl_enabled else "http"
+    logger.info(f"Starting MCP server in {protocol.upper()} mode at {protocol}://{host}:{port}/mcp")
 
     uvicorn_config = uvicorn.Config(
         app,
         host=host,
         port=port,
         log_level="warning",
+        ssl_certfile=str(ssl_certfile) if ssl_certfile else None,
+        ssl_keyfile=str(ssl_keyfile) if ssl_keyfile else None,
     )
     uvicorn_server = uvicorn.Server(uvicorn_config)
     await uvicorn_server.serve()
@@ -179,6 +203,11 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         description="TTAI MCP Server - TastyTrade AI Assistant"
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the desktop GUI instead of the MCP server",
     )
     parser.add_argument(
         "--transport",
@@ -208,6 +237,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Data directory (default: from TTAI_DATA_DIR env or '~/.ttai')",
     )
+    parser.add_argument(
+        "--ssl-domain",
+        default=None,
+        help="Base domain for SSL (e.g., 'tt-ai.dev'). Enables HTTPS mode.",
+    )
+    parser.add_argument(
+        "--ssl-port",
+        type=int,
+        default=None,
+        help="Port for HTTPS mode (default: from TTAI_SSL_PORT env or 8443)",
+    )
     return parser.parse_args()
 
 
@@ -235,9 +275,56 @@ def build_config(args: argparse.Namespace) -> ServerConfig:
     if args.log_level is not None:
         cfg.log_level = args.log_level
     if args.data_dir is not None:
-        cfg.data_dir = args.data_dir
+        cfg.data_dir = Path(args.data_dir)
+    if args.ssl_domain is not None:
+        cfg.ssl_domain = args.ssl_domain
+    if args.ssl_port is not None:
+        cfg.ssl_port = args.ssl_port
 
     return cfg
+
+
+async def _run_sse_with_ssl(server: Server, cfg: ServerConfig) -> None:
+    """Run SSE server with optional SSL support.
+
+    Attempts HTTPS if ssl_domain is configured, falls back to HTTP on failure.
+
+    Args:
+        server: The MCP server instance
+        cfg: Server configuration
+    """
+    # Auto-restore TastyTrade session if credentials exist
+    if _tastytrade_service is not None:
+        try:
+            if await _tastytrade_service.restore_session():
+                logger.info("TastyTrade session restored from stored credentials")
+            else:
+                logger.warning("No stored credentials to restore TastyTrade session")
+        except Exception as e:
+            logger.warning(f"Failed to restore TastyTrade session: {e}")
+
+    ssl_certfile: Path | None = None
+    ssl_keyfile: Path | None = None
+    host = cfg.host
+    port = cfg.port
+
+    if cfg.ssl_enabled:
+        logger.info(f"SSL enabled for domain: {cfg.ssl_local_domain}")
+        cert_manager = CertificateManager(cfg.ssl_cert_dir, cfg.ssl_cert_api)
+
+        try:
+            ssl_certfile, ssl_keyfile = await cert_manager.ensure_certificate()
+            # Bind to 127.0.0.1 (the domain resolves here via DNS)
+            host = "127.0.0.1"
+            port = cfg.ssl_port
+            logger.info(f"Certificate ready, starting HTTPS on {cfg.ssl_local_domain}:{port}")
+        except CertificateFetchError as e:
+            logger.warning(f"Failed to obtain SSL certificate: {e}")
+            logger.warning(f"Falling back to HTTP on {cfg.host}:{cfg.port}")
+            ssl_certfile = None
+            ssl_keyfile = None
+
+    await run_sse(server, host, port, ssl_certfile, ssl_keyfile)
 
 
 def run() -> None:
@@ -248,16 +335,35 @@ def run() -> None:
     # Setup logging
     setup_logging(cfg.log_level, cfg.log_dir)
 
+    # Check if GUI mode requested
+    if args.gui:
+        from src.gui.app import run_gui
+
+        # If transport is also specified, run both GUI and server
+        mcp_server = None
+        tastytrade_svc = None
+        if cfg.transport == "sse":
+            logger.info("TTAI starting in GUI mode with MCP server")
+            mcp_server = create_server(cfg)
+            tastytrade_svc = _tastytrade_service
+        else:
+            logger.info("TTAI starting in GUI mode")
+
+        sys.exit(run_gui(cfg, mcp_server, tastytrade_svc))
+
     logger.info(f"TTAI Server starting with config: {cfg}")
 
     # Create server with config
     server = create_server(cfg)
 
     # Run in appropriate mode
-    if cfg.transport == "sse":
-        asyncio.run(run_sse(server, cfg.host, cfg.port))
-    else:
-        asyncio.run(run_stdio(server))
+    try:
+        if cfg.transport == "sse":
+            asyncio.run(_run_sse_with_ssl(server, cfg))
+        else:
+            asyncio.run(run_stdio(server))
+    except KeyboardInterrupt:
+        logger.info("Server stopped")
 
 
 if __name__ == "__main__":

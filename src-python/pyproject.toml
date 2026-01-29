@@ -16,6 +16,9 @@ dependencies = [
     "pydantic>=2.0.0",
     "cryptography>=41.0.0",
     "tastytrade>=8.0",
+    "PySide6>=6.6.0",
+    "qasync>=0.27.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +28,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "black>=23.0.0",
+    "watchdog>=3.0.0",
 ]
 
 [project.scripts]
@@ -47,3 +51,8 @@ strict = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+]

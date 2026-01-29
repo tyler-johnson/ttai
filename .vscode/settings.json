@@ -1,0 +1,15 @@
+{
+  "python.defaultInterpreterPath": "./src-python/.venv/bin/python",
+  "python.analysis.extraPaths": ["./src-python"],
+  "python.autoComplete.extraPaths": ["./src-python"],
+  "python.analysis.typeCheckingMode": "basic",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    }
+  },
+  "ruff.cwd": "${workspaceFolder}/src-python"
+}

@@ -1,0 +1,22 @@
+name = "ttai-cert-api"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# KV namespace for certificate storage
+[[kv_namespaces]]
+binding = "CERT_STORE"
+id = "1130d31e8f1c4434b3d4f89b0db504d7"
+
+# Cron trigger for daily certificate renewal check
+[triggers]
+crons = ["0 3 * * *"] # 3:00 AM UTC daily
+
+# Environment variables (non-secret)
+[vars]
+CERT_DOMAIN = "local.tt-ai.dev"
+ACME_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
+# For testing, use staging: "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+# Secrets (set via: wrangler secret put CF_API_TOKEN)
+# CF_API_TOKEN - Cloudflare API token with DNS edit permission
+# CF_ZONE_ID - Cloudflare zone ID for tt-ai.dev

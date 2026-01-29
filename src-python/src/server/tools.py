@@ -81,7 +81,7 @@ def register_tools(server: Server, tastytrade_service: TastyTradeService) -> Non
             ),
             Tool(
                 name="get_quote",
-                description="Get current quote (bid/ask/last) for a symbol",
+                description="Get quote data for a symbol including price, volume, IV, beta, market cap, and earnings",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -147,12 +147,7 @@ def register_tools(server: Server, tastytrade_service: TastyTradeService) -> Non
             if quote is None:
                 result = {"error": f"Failed to get quote for {symbol}"}
             else:
-                result = {
-                    "symbol": quote.symbol,
-                    "bid": quote.bid,
-                    "ask": quote.ask,
-                    "last": quote.last,
-                }
+                result = quote.to_dict()
 
             return [TextContent(type="text", text=json.dumps(result))]
 

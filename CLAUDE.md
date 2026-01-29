@@ -42,6 +42,9 @@ cd src-python
 # Headless mode (HTTP/SSE) - for development with Claude Desktop
 uv run python -m src.server.main --transport sse --port 8080
 
+# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:8443
+TTAI_SSL_DOMAIN=tt-ai.dev uv run python -m src.server.main --transport sse
+
 # Sidecar mode (stdio) - default, for Tauri integration
 uv run python -m src.server.main
 
@@ -58,6 +61,13 @@ TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --transport sse --port 808
 | `TTAI_PORT` | SSE port | `8080` |
 | `TTAI_LOG_LEVEL` | Log level | `INFO` |
 | `TTAI_DATA_DIR` | Data directory | `~/.ttai` |
+| `TTAI_SSL_DOMAIN` | Base domain for SSL (e.g., `tt-ai.dev`) | (none) |
+| `TTAI_SSL_PORT` | HTTPS port | `8443` |
+
+When `TTAI_SSL_DOMAIN` is set:
+- Cert API URL: `https://api.{TTAI_SSL_DOMAIN}/cert`
+- HTTPS server: `https://local.{TTAI_SSL_DOMAIN}:{TTAI_SSL_PORT}`
+- Falls back to HTTP if cert fetch fails
 
 ### Project Structure
 
@@ -68,6 +78,7 @@ src-python/
 │   ├── server/              # MCP server implementation
 │   │   ├── main.py          # Entry point
 │   │   ├── config.py        # Configuration
+│   │   ├── ssl.py           # SSL certificate management
 │   │   └── tools.py         # MCP tool registration
 │   ├── auth/                # Authentication
 │   │   └── credentials.py   # Encrypted credential storage
@@ -77,6 +88,13 @@ src-python/
 │   │   └── database.py      # SQLite database
 │   └── utils/               # Shared utilities
 └── tests/                   # Test suite
+
+cert-api/                    # Cloudflare Worker for certificate distribution
+├── src/
+│   ├── index.ts             # HTTP routes + cron handler
+│   ├── acme.ts              # ACME client for Let's Encrypt
+│   └── dns.ts               # Cloudflare DNS API helper
+└── wrangler.toml            # Cloudflare config
 ```
 
 ### Key Dependencies
@@ -85,6 +103,7 @@ src-python/
 - `tastytrade>=8.0` - Official TastyTrade Python SDK
 - `cryptography>=41.0.0` - Fernet encryption for credentials
 - `starlette>=0.27.0` + `uvicorn>=0.23.0` - HTTP/SSE transport
+- `httpx>=0.25.0` - Async HTTP client for certificate fetching
 
 ## Architecture Documentation
 
@@ -108,6 +127,8 @@ Detailed design docs are in `docs/architecture/`:
 
 ### Implemented
 - MCP server with stdio/SSE transports
+- HTTPS support with certificate fetching from Cloudflare Worker
+- Cloudflare Worker for SSL certificate distribution (cert-api/)
 - Configuration management
 - Database and cache services
 - Credential manager with Fernet encryption
@@ -168,3 +189,7 @@ All user data is stored locally in `~/.ttai/`:
 - `.credentials` - Encrypted TastyTrade credentials
 - `ttai.db` - SQLite database
 - `logs/` - Application logs
+- `ssl/` - Cached SSL certificates (when HTTPS enabled)
+  - `cert.pem` - Certificate chain
+  - `key.pem` - Private key
+  - `meta.json` - Certificate metadata (expiry, domain)
