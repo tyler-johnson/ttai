@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Development script that auto-restarts the GUI on file changes."""
 
-import os
 import subprocess
 import sys
 import time
@@ -16,9 +15,6 @@ except ImportError:
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
 
-# SSL configuration for development
-SSL_DOMAIN = "tt-ai.dev"
-
 
 class RestartHandler(FileSystemEventHandler):
     def __init__(self):
@@ -30,13 +26,10 @@ class RestartHandler(FileSystemEventHandler):
         if self.process:
             self.process.terminate()
             self.process.wait()
-        print("\n🚀 Starting TTAI GUI with MCP server...")
-        env = os.environ.copy()
-        env["TTAI_SSL_DOMAIN"] = SSL_DOMAIN
+        print("\n🚀 Starting TTAI...")
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "src.server.main", "--gui", "--transport", "sse"],
+            [sys.executable, "-m", "src.server.main"],
             cwd=Path(__file__).parent,
-            env=env,
         )
         self.last_restart = time.time()
 

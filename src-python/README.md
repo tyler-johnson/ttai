@@ -1,6 +1,6 @@
-# TTAI Server
+# TTAI
 
-TastyTrade AI MCP Server - Model Context Protocol server for TastyTrade trading assistant.
+TastyTrade AI - Desktop app and MCP server for TastyTrade trading assistant.
 
 ## Installation
 
@@ -10,21 +10,29 @@ pip install -e ".[dev]"
 
 ## Usage
 
-### SSE Mode (for HTTP clients)
+### GUI Mode (default)
+
+Double-click the app or run without arguments:
 
 ```bash
-ttai-server --transport sse --port 8080
+ttai-server
 ```
 
-### Stdio Mode (for sidecar/subprocess)
+### Headless MCP Server
+
+For Claude Desktop or other MCP clients:
 
 ```bash
-ttai-server --transport stdio
+# HTTP mode (default transport)
+ttai-server --headless --port 8080
+
+# Stdio mode (for subprocess/sidecar integration)
+ttai-server --headless --transport stdio
 ```
 
 ## Environment Variables
 
-- `TTAI_TRANSPORT`: "stdio" or "sse" (default: stdio)
+- `TTAI_TRANSPORT`: "stdio" or "http" (default: http)
 - `TTAI_HOST`: Server host (default: localhost)
 - `TTAI_PORT`: Server port (default: 8080)
 - `TTAI_LOG_LEVEL`: Log level (default: INFO)

@@ -125,11 +125,11 @@ class TTAIApplication:
 
     async def _run_mcp_server(self) -> None:
         """Run the MCP server in the background."""
-        from src.server.main import _run_sse_with_ssl
+        from src.server.main import _run_http_with_ssl
 
         logger.info("Starting MCP server in background...")
         try:
-            await _run_sse_with_ssl(self.mcp_server, self.config)
+            await _run_http_with_ssl(self.mcp_server, self.config)
         except asyncio.CancelledError:
             logger.info("MCP server stopped")
         except Exception as e:

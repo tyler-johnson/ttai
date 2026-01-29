@@ -70,7 +70,7 @@ class SettingsPage(QScrollArea):
 
         claude_vbox.addWidget(self._make_url_row())
 
-        desc = QLabel("Start with --transport sse flag for Claude Desktop")
+        desc = QLabel("Use --headless flag for Claude Desktop integration")
         desc.setEnabled(False)
         claude_vbox.addWidget(desc)
 

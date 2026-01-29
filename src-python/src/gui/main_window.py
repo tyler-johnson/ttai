@@ -1,5 +1,6 @@
 """Main application window."""
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
@@ -23,8 +24,15 @@ from src.gui.widgets.settings_page import SettingsPage
 from src.server.config import ServerConfig
 from src.services.tastytrade import TastyTradeService
 
-# Resource paths
-RESOURCES_DIR = Path(__file__).parent / "resources"
+def _get_resources_dir() -> Path:
+    """Get resources directory, handling PyInstaller frozen apps."""
+    if getattr(sys, "frozen", False):
+        # Running as PyInstaller bundle - resources are in _MEIPASS
+        return Path(sys._MEIPASS) / "src" / "gui" / "resources"  # type: ignore[attr-defined]
+    return Path(__file__).parent / "resources"
+
+
+RESOURCES_DIR = _get_resources_dir()
 
 
 def _load_themed_icon(svg_path: Path, palette: QPalette) -> QIcon:

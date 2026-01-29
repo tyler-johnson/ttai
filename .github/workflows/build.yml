@@ -1,0 +1,102 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_pattern: "TTAI-aarch64-apple-darwin.zip"
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_pattern: "TTAI-x86_64-apple-darwin.zip"
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_pattern: "TTAI-x86_64-unknown-linux-gnu"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_pattern: "TTAI-x86_64-pc-windows-msvc.exe"
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.target }})
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install Linux Qt dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libegl1 \
+            libgl1-mesa-glx \
+            libfontconfig1 \
+            libdbus-1-3
+
+      - name: Install dependencies
+        working-directory: src-python
+        run: |
+          uv sync
+          uv pip install pyinstaller
+
+      - name: Build executable
+        working-directory: src-python
+        run: uv run python scripts/build.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTAI-${{ matrix.target }}
+          path: src-python/dist/${{ matrix.artifact_pattern }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*

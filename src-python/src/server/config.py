@@ -10,14 +10,14 @@ from typing import Literal
 class ServerConfig:
     """Configuration for the TTAI MCP server."""
 
-    transport: Literal["stdio", "sse"] = "stdio"
+    transport: Literal["stdio", "http"] = "http"
     host: str = "localhost"
     port: int = 8080
     log_level: str = "INFO"
     data_dir: Path = field(default_factory=lambda: Path.home() / ".ttai")
 
     # SSL configuration
-    ssl_domain: str = ""  # Base domain (e.g., "tt-ai.dev")
+    ssl_domain: str = "tt-ai.dev"  # Base domain for SSL
     ssl_port: int = 8443  # HTTPS port
     ssl_cert_api_override: str = ""  # Override cert API URL (for local dev)
 
@@ -58,19 +58,19 @@ class ServerConfig:
         """Create configuration from environment variables.
 
         Environment variables:
-            TTAI_TRANSPORT: "stdio" or "sse" (default: stdio)
+            TTAI_TRANSPORT: "stdio" or "http" (default: http)
             TTAI_HOST: Server host (default: localhost)
             TTAI_PORT: Server port (default: 8080)
             TTAI_LOG_LEVEL: Log level (default: INFO)
             TTAI_DATA_DIR: Data directory (default: ~/.ttai)
-            TTAI_SSL_DOMAIN: Base domain for SSL (e.g., "tt-ai.dev")
+            TTAI_SSL_DOMAIN: Base domain for SSL (default: tt-ai.dev)
             TTAI_SSL_PORT: HTTPS port (default: 8443)
 
         Returns:
             ServerConfig instance with values from environment
         """
-        transport_str = os.environ.get("TTAI_TRANSPORT", "stdio").lower()
-        transport: Literal["stdio", "sse"] = "sse" if transport_str == "sse" else "stdio"
+        transport_str = os.environ.get("TTAI_TRANSPORT", "http").lower()
+        transport: Literal["stdio", "http"] = "stdio" if transport_str == "stdio" else "http"
 
         return cls(
             transport=transport,
@@ -78,7 +78,7 @@ class ServerConfig:
             port=int(os.environ.get("TTAI_PORT", "8080")),
             log_level=os.environ.get("TTAI_LOG_LEVEL", "INFO").upper(),
             data_dir=Path(os.environ.get("TTAI_DATA_DIR", str(Path.home() / ".ttai"))),
-            ssl_domain=os.environ.get("TTAI_SSL_DOMAIN", ""),
+            ssl_domain=os.environ.get("TTAI_SSL_DOMAIN", "tt-ai.dev"),
             ssl_port=int(os.environ.get("TTAI_SSL_PORT", "8443")),
             ssl_cert_api_override=os.environ.get("TTAI_SSL_CERT_API", ""),
         )

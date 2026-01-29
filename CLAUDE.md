@@ -24,7 +24,7 @@ cd src-python
 uv sync
 
 # Run Python commands through uv
-uv run python -m src.server.main --transport sse --port 8080
+uv run python -m src.server.main --headless --port 8080
 
 # Run tests
 uv run pytest tests/ -v
@@ -39,29 +39,32 @@ uv run mypy src/
 ```bash
 cd src-python
 
-# Headless mode (HTTP/SSE) - for development with Claude Desktop
-uv run python -m src.server.main --transport sse --port 8080
-
-# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:8443
-TTAI_SSL_DOMAIN=tt-ai.dev uv run python -m src.server.main --transport sse
-
-# Sidecar mode (stdio) - default, for Tauri integration
+# GUI mode (default) - launches desktop app
 uv run python -m src.server.main
 
+# Headless HTTP mode - for Claude Desktop
+uv run python -m src.server.main --headless --port 8080
+
+# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:8443
+TTAI_SSL_DOMAIN=tt-ai.dev uv run python -m src.server.main --headless
+
+# Stdio mode - for subprocess/sidecar integration
+uv run python -m src.server.main --headless --transport stdio
+
 # With debug logging
-TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --transport sse --port 8080
+TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --headless --port 8080
 ```
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TTAI_TRANSPORT` | Transport: `stdio` or `sse` | `stdio` |
-| `TTAI_HOST` | SSE host | `localhost` |
-| `TTAI_PORT` | SSE port | `8080` |
+| `TTAI_TRANSPORT` | Transport: `stdio` or `http` | `http` |
+| `TTAI_HOST` | HTTP host | `localhost` |
+| `TTAI_PORT` | HTTP port | `8080` |
 | `TTAI_LOG_LEVEL` | Log level | `INFO` |
 | `TTAI_DATA_DIR` | Data directory | `~/.ttai` |
-| `TTAI_SSL_DOMAIN` | Base domain for SSL (e.g., `tt-ai.dev`) | (none) |
+| `TTAI_SSL_DOMAIN` | Base domain for SSL | `tt-ai.dev` |
 | `TTAI_SSL_PORT` | HTTPS port | `8443` |
 
 When `TTAI_SSL_DOMAIN` is set:
@@ -102,7 +105,7 @@ cert-api/                    # Cloudflare Worker for certificate distribution
 - `mcp>=1.0.0` - Model Context Protocol SDK
 - `tastytrade>=8.0` - Official TastyTrade Python SDK
 - `cryptography>=41.0.0` - Fernet encryption for credentials
-- `starlette>=0.27.0` + `uvicorn>=0.23.0` - HTTP/SSE transport
+- `starlette>=0.27.0` + `uvicorn>=0.23.0` - HTTP transport
 - `httpx>=0.25.0` - Async HTTP client for certificate fetching
 
 ## Architecture Documentation
@@ -126,7 +129,8 @@ Detailed design docs are in `docs/architecture/`:
 ## Current Implementation Status
 
 ### Implemented
-- MCP server with stdio/SSE transports
+- MCP server with stdio/HTTP transports
+- Desktop GUI app (PySide6)
 - HTTPS support with certificate fetching from Cloudflare Worker
 - Cloudflare Worker for SSL certificate distribution (cert-api/)
 - Configuration management
@@ -140,7 +144,6 @@ Detailed design docs are in `docs/architecture/`:
 - AI agents (chart analyst, options analyst)
 - Background tasks and monitors
 - Knowledge base
-- Tauri desktop app / frontend
 
 ## Testing
 

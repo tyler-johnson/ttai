@@ -131,14 +131,14 @@ async def run_stdio(server: Server) -> None:
         )
 
 
-async def run_sse(
+async def run_http(
     server: Server,
     host: str,
     port: int,
     ssl_certfile: Path | None = None,
     ssl_keyfile: Path | None = None,
 ) -> None:
-    """Run the server in SSE mode with HTTP/HTTPS transport.
+    """Run the server in HTTP/HTTPS mode with streamable HTTP transport.
 
     Args:
         server: The MCP server instance
@@ -202,29 +202,29 @@ def parse_args() -> argparse.Namespace:
         Parsed arguments namespace
     """
     parser = argparse.ArgumentParser(
-        description="TTAI MCP Server - TastyTrade AI Assistant"
+        description="TTAI - TastyTrade AI Assistant"
     )
     parser.add_argument(
-        "--gui",
+        "--headless",
         action="store_true",
-        help="Launch the desktop GUI instead of the MCP server",
+        help="Run as headless MCP server (no GUI). Default is to launch GUI.",
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "http"],
         default=None,
-        help="Transport mode (default: from TTAI_TRANSPORT env or 'stdio')",
+        help="Transport mode for headless server (default: from TTAI_TRANSPORT env or 'http')",
     )
     parser.add_argument(
         "--host",
         default=None,
-        help="Host to bind to for SSE mode (default: from TTAI_HOST env or 'localhost')",
+        help="Host to bind to for HTTP mode (default: from TTAI_HOST env or 'localhost')",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=None,
-        help="Port to bind to for SSE mode (default: from TTAI_PORT env or 8080)",
+        help="Port to bind to for HTTP mode (default: from TTAI_PORT env or 8080)",
     )
     parser.add_argument(
         "--log-level",
@@ -284,8 +284,8 @@ def build_config(args: argparse.Namespace) -> ServerConfig:
     return cfg
 
 
-async def _run_sse_with_ssl(server: Server, cfg: ServerConfig) -> None:
-    """Run SSE server with optional SSL support.
+async def _run_http_with_ssl(server: Server, cfg: ServerConfig) -> None:
+    """Run HTTP server with optional SSL support.
 
     Attempts HTTPS if ssl_domain is configured, falls back to HTTP on failure.
 
@@ -324,25 +324,32 @@ async def _run_sse_with_ssl(server: Server, cfg: ServerConfig) -> None:
             ssl_certfile = None
             ssl_keyfile = None
 
-    await run_sse(server, host, port, ssl_certfile, ssl_keyfile)
+    await run_http(server, host, port, ssl_certfile, ssl_keyfile)
 
 
 def run() -> None:
-    """Main entry point for the TTAI MCP server."""
+    """Main entry point for TTAI.
+
+    Default behavior is to launch the GUI. Use --headless for MCP server mode.
+    """
     args = parse_args()
     cfg = build_config(args)
 
     # Setup logging
     setup_logging(cfg.log_level, cfg.log_dir)
 
-    # Check if GUI mode requested
-    if args.gui:
+    # Determine if running in headless mode
+    # Headless if: --headless flag, or --transport specified, or TTAI_TRANSPORT env set
+    run_headless = args.headless or args.transport is not None
+
+    if not run_headless:
+        # GUI mode (default)
         from src.gui.app import run_gui
 
-        # If transport is also specified, run both GUI and server
+        # If transport is also specified via env, run both GUI and server
         mcp_server = None
         tastytrade_svc = None
-        if cfg.transport == "sse":
+        if cfg.transport == "http":
             logger.info("TTAI starting in GUI mode with MCP server")
             mcp_server = create_server(cfg)
             tastytrade_svc = _tastytrade_service
@@ -351,15 +358,16 @@ def run() -> None:
 
         sys.exit(run_gui(cfg, mcp_server, tastytrade_svc))
 
-    logger.info(f"TTAI Server starting with config: {cfg}")
+    # Headless MCP server mode
+    logger.info(f"TTAI Server starting in headless mode with config: {cfg}")
 
     # Create server with config
     server = create_server(cfg)
 
     # Run in appropriate mode
     try:
-        if cfg.transport == "sse":
-            asyncio.run(_run_sse_with_ssl(server, cfg))
+        if cfg.transport == "http":
+            asyncio.run(_run_http_with_ssl(server, cfg))
         else:
             asyncio.run(run_stdio(server))
     except KeyboardInterrupt:

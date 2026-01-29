@@ -20,3 +20,19 @@ ACME_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
 # Secrets (set via: wrangler secret put CF_API_TOKEN)
 # CF_API_TOKEN - Cloudflare API token with DNS edit permission
 # CF_ZONE_ID - Cloudflare zone ID for tt-ai.dev
+
+# Observability
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
