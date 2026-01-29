@@ -213,7 +213,7 @@ def parse_args() -> argparse.Namespace:
         "--transport",
         choices=["stdio", "http"],
         default=None,
-        help="Transport mode for headless server (default: from TTAI_TRANSPORT env or 'http')",
+        help="Transport mode (default: from TTAI_TRANSPORT env or 'http')",
     )
     parser.add_argument(
         "--host",
@@ -338,11 +338,7 @@ def run() -> None:
     # Setup logging
     setup_logging(cfg.log_level, cfg.log_dir)
 
-    # Determine if running in headless mode
-    # Headless if: --headless flag, or --transport specified, or TTAI_TRANSPORT env set
-    run_headless = args.headless or args.transport is not None
-
-    if not run_headless:
+    if not args.headless:
         # GUI mode (default)
         from src.gui.app import run_gui
 

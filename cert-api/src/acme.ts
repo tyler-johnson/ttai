@@ -46,6 +46,11 @@ export interface CertificateBundle {
   issued_at: string;
 }
 
+export interface EabCredentials {
+  kid: string;
+  hmacKey: string;
+}
+
 export class AcmeClient {
   private directoryUrl: string;
   private directory: AcmeDirectory | null = null;
@@ -53,10 +58,12 @@ export class AcmeClient {
   private privateKey: CryptoKey | null = null;
   private publicJwk: JwkPublic | null = null;
   private dns: CloudflareDns;
+  private eab: EabCredentials | null = null;
 
-  constructor(directoryUrl: string, dns: CloudflareDns) {
+  constructor(directoryUrl: string, dns: CloudflareDns, eab?: EabCredentials) {
     this.directoryUrl = directoryUrl;
     this.dns = dns;
+    this.eab = eab || null;
   }
 
   /**
@@ -93,7 +100,13 @@ export class AcmeClient {
   }
 
   private async fetchDirectory(): Promise<void> {
-    const response = await fetch(this.directoryUrl);
+    const response = await fetch(this.directoryUrl, {
+      headers: { "User-Agent": "ttai-cert-api/1.0" },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to fetch ACME directory: ${response.status} - ${text.slice(0, 200)}`);
+    }
     this.directory = (await response.json()) as AcmeDirectory;
   }
 
@@ -175,7 +188,13 @@ export class AcmeClient {
       body,
     });
 
-    const responseBody = await response.json();
+    const text = await response.text();
+    let responseBody: unknown;
+    try {
+      responseBody = JSON.parse(text);
+    } catch {
+      throw new Error(`ACME response not JSON (${response.status}): ${text.slice(0, 200)}`);
+    }
 
     if (!response.ok) {
       const error = responseBody as { type?: string; detail?: string };
@@ -196,8 +215,55 @@ export class AcmeClient {
       payload.contact = [`mailto:${email}`];
     }
 
+    // Add External Account Binding if provided (required for ZeroSSL)
+    if (this.eab) {
+      payload.externalAccountBinding = await this.createEabJws();
+    }
+
     const { headers } = await this.acmeRequest(this.directory!.newAccount, payload, true);
     this.accountUrl = headers.get("Location");
+  }
+
+  /**
+   * Create JWS for External Account Binding (EAB).
+   */
+  private async createEabJws(): Promise<object> {
+    if (!this.eab) throw new Error("EAB credentials not set");
+
+    // Decode the HMAC key from base64url
+    const hmacKeyBytes = this.base64urlDecode(this.eab.hmacKey);
+
+    // Import the HMAC key
+    const hmacKey = await crypto.subtle.importKey(
+      "raw",
+      hmacKeyBytes,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+
+    // EAB protected header
+    const protectedHeader = {
+      alg: "HS256",
+      kid: this.eab.kid,
+      url: this.directory!.newAccount,
+    };
+
+    const protectedB64 = this.base64url(JSON.stringify(protectedHeader));
+    const payloadB64 = this.base64url(JSON.stringify(this.publicJwk));
+
+    const signingInput = `${protectedB64}.${payloadB64}`;
+    const signature = await crypto.subtle.sign(
+      "HMAC",
+      hmacKey,
+      new TextEncoder().encode(signingInput)
+    );
+
+    return {
+      protected: protectedB64,
+      payload: payloadB64,
+      signature: this.base64url(signature),
+    };
   }
 
   /**
@@ -212,9 +278,9 @@ export class AcmeClient {
     const orderUrl = orderHeaders.get("Location")!;
     const orderData = order as AcmeOrder;
 
-    // Get authorization
-    const authResponse = await fetch(orderData.authorizations[0]);
-    const auth = (await authResponse.json()) as AcmeAuthorization;
+    // Get authorization (POST-as-GET per RFC 8555)
+    const { body: authBody } = await this.acmeRequest(orderData.authorizations[0], "");
+    const auth = authBody as AcmeAuthorization;
 
     // Find DNS-01 challenge
     const dnsChallenge = auth.challenges.find((c) => c.type === "dns-01");
@@ -252,11 +318,8 @@ export class AcmeClient {
       // Poll for certificate
       const certUrl = await this.pollOrder(orderUrl);
 
-      // Download certificate
-      const certResponse = await fetch(certUrl, {
-        headers: { Accept: "application/pem-certificate-chain" },
-      });
-      const cert = await certResponse.text();
+      // Download certificate (POST-as-GET)
+      const cert = await this.downloadCertificate(certUrl);
 
       // Export private key to PEM
       const keyPem = await this.keyToPem(certKey);
@@ -278,6 +341,28 @@ export class AcmeClient {
     }
   }
 
+  /**
+   * Download certificate using POST-as-GET.
+   */
+  private async downloadCertificate(url: string): Promise<string> {
+    const body = await this.signPayload(url, "");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/jose+json",
+        Accept: "application/pem-certificate-chain",
+      },
+      body,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to download certificate: ${response.status} - ${text.slice(0, 200)}`);
+    }
+
+    return await response.text();
+  }
+
   private async computeThumbprint(): Promise<string> {
     const jwkOrdered = JSON.stringify({
       crv: this.publicJwk!.crv,
@@ -291,8 +376,8 @@ export class AcmeClient {
 
   private async pollAuthorization(url: string, maxAttempts: number = 30): Promise<void> {
     for (let i = 0; i < maxAttempts; i++) {
-      const response = await fetch(url);
-      const auth = (await response.json()) as AcmeAuthorization;
+      const { body } = await this.acmeRequest(url, "");
+      const auth = body as AcmeAuthorization;
 
       if (auth.status === "valid") {
         return;
@@ -308,8 +393,8 @@ export class AcmeClient {
 
   private async pollOrder(url: string, maxAttempts: number = 30): Promise<string> {
     for (let i = 0; i < maxAttempts; i++) {
-      const response = await fetch(url);
-      const order = (await response.json()) as AcmeOrder;
+      const { body } = await this.acmeRequest(url, "");
+      const order = body as AcmeOrder;
 
       if (order.status === "valid" && order.certificate) {
         return order.certificate;

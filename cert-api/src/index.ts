@@ -2,14 +2,15 @@
  * Cloudflare Worker for SSL certificate distribution.
  *
  * HTTP Endpoints:
- *   GET /cert   - Returns current certificate bundle
- *   GET /health - Health check
+ *   GET  /cert  - Returns current certificate bundle
+ *   GET  /health - Health check
+ *   POST /renew - Manually trigger certificate renewal
  *
  * Cron Trigger:
  *   Daily at 3:00 AM UTC - Check and renew certificate if needed
  */
 
-import { AcmeClient, CertificateBundle } from "./acme";
+import { AcmeClient, CertificateBundle, EabCredentials } from "./acme";
 import { CloudflareDns } from "./dns";
 
 export interface Env {
@@ -18,6 +19,9 @@ export interface Env {
   ACME_DIRECTORY: string;
   CF_API_TOKEN: string;
   CF_ZONE_ID: string;
+  // ZeroSSL External Account Binding (required for ZeroSSL ACME)
+  EAB_KID?: string;
+  EAB_HMAC_KEY?: string;
 }
 
 // KV keys
@@ -49,6 +53,8 @@ export default {
           return await handleGetCert(env, corsHeaders);
         case "/health":
           return handleHealth(corsHeaders);
+        case "/renew":
+          return await handleRenewRoute(env, corsHeaders);
         default:
           return new Response("Not Found", { status: 404, headers: corsHeaders });
       }
@@ -130,6 +136,40 @@ function handleHealth(corsHeaders: Record<string, string>): Response {
 }
 
 /**
+ * POST /renew - Manually trigger certificate renewal
+ */
+async function handleRenewRoute(
+  env: Env,
+  corsHeaders: Record<string, string>
+): Promise<Response> {
+  try {
+    await handleCronRenewal(env);
+    return new Response(
+      JSON.stringify({
+        status: "ok",
+        message: "Certificate renewal completed",
+        timestamp: new Date().toISOString(),
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  } catch (error) {
+    return new Response(
+      JSON.stringify({
+        status: "error",
+        error: error instanceof Error ? error.message : "Renewal failed",
+        timestamp: new Date().toISOString(),
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  }
+}
+
+/**
  * Cron handler - Check certificate expiry and renew if needed
  */
 async function handleCronRenewal(env: Env): Promise<void> {
@@ -156,7 +196,11 @@ async function handleCronRenewal(env: Env): Promise<void> {
 
   // Initialize ACME client
   const dns = new CloudflareDns(env.CF_API_TOKEN, env.CF_ZONE_ID);
-  const acme = new AcmeClient(env.ACME_DIRECTORY, dns);
+  const eab: EabCredentials | undefined =
+    env.EAB_KID && env.EAB_HMAC_KEY
+      ? { kid: env.EAB_KID, hmacKey: env.EAB_HMAC_KEY }
+      : undefined;
+  const acme = new AcmeClient(env.ACME_DIRECTORY, dns, eab);
 
   // Load or generate account key
   const accountKeyJson = await env.CERT_STORE.get(KV_ACCOUNT_KEY);

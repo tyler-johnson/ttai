@@ -14,12 +14,15 @@ crons = ["0 3 * * *"] # 3:00 AM UTC daily
 # Environment variables (non-secret)
 [vars]
 CERT_DOMAIN = "local.tt-ai.dev"
-ACME_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
-# For testing, use staging: "https://acme-staging-v02.api.letsencrypt.org/directory"
+# Using ZeroSSL since Let's Encrypt has SSL handshake issues from Workers
+ACME_DIRECTORY = "https://acme.zerossl.com/v2/DV90"
+# For Let's Encrypt (currently broken from Workers): "https://acme-v02.api.letsencrypt.org/directory"
 
-# Secrets (set via: wrangler secret put CF_API_TOKEN)
+# Secrets (set via: wrangler secret put <NAME>)
 # CF_API_TOKEN - Cloudflare API token with DNS edit permission
 # CF_ZONE_ID - Cloudflare zone ID for tt-ai.dev
+# EAB_KID - ZeroSSL External Account Binding Key ID (from https://app.zerossl.com/developer)
+# EAB_HMAC_KEY - ZeroSSL External Account Binding HMAC Key
 
 # Observability
 [observability]

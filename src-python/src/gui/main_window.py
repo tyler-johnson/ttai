@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QAction, QIcon, QPalette, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -18,11 +18,14 @@ from PySide6.QtWidgets import (
 )
 
 from src.auth.credentials import CredentialManager
+from src.gui.preferences import PreferencesManager
 from src.gui.state import AppState
 from src.gui.widgets.about_page import AboutPage
+from src.gui.widgets.connection_page import ConnectionPage
 from src.gui.widgets.settings_page import SettingsPage
 from src.server.config import ServerConfig
 from src.services.tastytrade import TastyTradeService
+
 
 def _get_resources_dir() -> Path:
     """Get resources directory, handling PyInstaller frozen apps."""
@@ -50,6 +53,7 @@ def _load_themed_icon(svg_path: Path, palette: QPalette) -> QIcon:
     pixmap.fill(Qt.GlobalColor.transparent)
 
     from PySide6.QtGui import QPainter
+
     painter = QPainter(pixmap)
     renderer.render(painter)
     painter.end()
@@ -66,6 +70,7 @@ class MainWindow(QMainWindow):
         tastytrade_service: TastyTradeService,
         credential_manager: CredentialManager,
         config: ServerConfig,
+        preferences: PreferencesManager | None = None,
     ) -> None:
         """Initialize the main window."""
         super().__init__()
@@ -73,6 +78,10 @@ class MainWindow(QMainWindow):
         self.tastytrade_service = tastytrade_service
         self.credential_manager = credential_manager
         self.config = config
+        self.preferences = preferences
+
+        # Flag for force quit (actual exit vs hide to tray)
+        self._force_quit = False
 
         self._setup_window()
         self._setup_menu()
@@ -81,9 +90,14 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self) -> None:
         """Configure window properties."""
-        self.setWindowTitle("TTAI Settings")
+        self.setWindowTitle("TTAI")
         # Fixed size, non-resizable
-        self.setFixedSize(580, 400)
+        self.setFixedSize(620, 400)
+
+        # On Windows/Linux, use Tool window flag to hide from taskbar
+        # macOS uses a different approach (NSApplicationActivationPolicyAccessory)
+        if sys.platform != "darwin":
+            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.Tool)
 
         # Unified title bar on macOS
         self.setUnifiedTitleAndToolBarOnMac(True)
@@ -102,7 +116,7 @@ class MainWindow(QMainWindow):
         help_menu.addSeparator()
 
         about_action = QAction("About TTAI", self)
-        about_action.triggered.connect(lambda: self._select_tab(1))
+        about_action.triggered.connect(lambda: self._select_tab(2))
         help_menu.addAction(about_action)
 
     def _setup_toolbar(self) -> None:
@@ -127,12 +141,25 @@ class MainWindow(QMainWindow):
         self.tab_group.setExclusive(True)
 
         # Fixed width for consistent tab sizing
-        tab_width = 70
+        tab_width = 80
 
         # Load icons with system text color
         palette = self.palette()
+        connection_icon = _load_themed_icon(RESOURCES_DIR / "plug.svg", palette)
         settings_icon = _load_themed_icon(RESOURCES_DIR / "settings.svg", palette)
         about_icon = _load_themed_icon(RESOURCES_DIR / "info.svg", palette)
+
+        # Connection button
+        self.connection_btn = QToolButton()
+        self.connection_btn.setText("Connection")
+        self.connection_btn.setIcon(connection_icon)
+        self.connection_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.connection_btn.setCheckable(True)
+        self.connection_btn.setChecked(True)
+        self.connection_btn.setAutoRaise(True)
+        self.connection_btn.setFixedWidth(tab_width)
+        self.tab_group.addButton(self.connection_btn, 0)
+        tab_layout.addWidget(self.connection_btn)
 
         # Settings button
         self.settings_btn = QToolButton()
@@ -140,10 +167,9 @@ class MainWindow(QMainWindow):
         self.settings_btn.setIcon(settings_icon)
         self.settings_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.settings_btn.setCheckable(True)
-        self.settings_btn.setChecked(True)
         self.settings_btn.setAutoRaise(True)
         self.settings_btn.setFixedWidth(tab_width)
-        self.tab_group.addButton(self.settings_btn, 0)
+        self.tab_group.addButton(self.settings_btn, 1)
         tab_layout.addWidget(self.settings_btn)
 
         # About button
@@ -154,7 +180,7 @@ class MainWindow(QMainWindow):
         self.about_btn.setCheckable(True)
         self.about_btn.setAutoRaise(True)
         self.about_btn.setFixedWidth(tab_width)
-        self.tab_group.addButton(self.about_btn, 1)
+        self.tab_group.addButton(self.about_btn, 2)
         tab_layout.addWidget(self.about_btn)
 
         self.tab_group.idClicked.connect(self._on_tab_changed)
@@ -173,13 +199,17 @@ class MainWindow(QMainWindow):
         self.content_stack = QStackedWidget()
         self.setCentralWidget(self.content_stack)
 
-        # Settings page
-        self.settings_page = SettingsPage(
+        # Connection page
+        self.connection_page = ConnectionPage(
             state=self.state,
             tastytrade_service=self.tastytrade_service,
             credential_manager=self.credential_manager,
             config=self.config,
         )
+        self.content_stack.addWidget(self.connection_page)
+
+        # Settings page
+        self.settings_page = SettingsPage(preferences=self.preferences)
         self.content_stack.addWidget(self.settings_page)
 
         # About page
@@ -193,6 +223,8 @@ class MainWindow(QMainWindow):
     def _select_tab(self, index: int) -> None:
         """Programmatically select a tab."""
         if index == 0:
+            self.connection_btn.setChecked(True)
+        elif index == 1:
             self.settings_btn.setChecked(True)
         else:
             self.about_btn.setChecked(True)
@@ -204,3 +236,26 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QDesktopServices
 
         QDesktopServices.openUrl(QUrl("https://github.com/your-repo/ttai"))
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override
+        """Handle window close event.
+
+        Instead of quitting, hide the window to the system tray.
+        The app continues running in the background.
+        """
+        if self._force_quit:
+            event.accept()
+        else:
+            event.ignore()
+            self.hide()
+
+    def force_quit(self) -> None:
+        """Force quit the application (called from tray quit action)."""
+        self._force_quit = True
+        self.close()
+
+    def show_and_activate(self) -> None:
+        """Show and bring window to front."""
+        self.show()
+        self.raise_()
+        self.activateWindow()

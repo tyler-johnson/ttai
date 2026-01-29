@@ -19,6 +19,7 @@ dependencies = [
     "PySide6>=6.6.0",
     "qasync>=0.27.0",
     "httpx>=0.25.0",
+    "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

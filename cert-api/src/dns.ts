@@ -33,11 +33,18 @@ export class CloudflareDns {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    const data = (await response.json()) as {
+    const text = await response.text();
+    let data: {
       success: boolean;
       errors?: Array<{ message: string }>;
       result?: unknown;
     };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Cloudflare API response not JSON (${response.status}): ${text.slice(0, 200)}`);
+    }
+
     if (!data.success) {
       const errors = data.errors?.map((e) => e.message).join(", ") || "Unknown error";
       throw new Error(`Cloudflare API error: ${errors}`);
