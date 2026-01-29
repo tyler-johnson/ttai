@@ -81,6 +81,140 @@ def create_ico(png_path: Path, output_path: Path) -> bool:
         return False
 
 
+def cleanup_bundle(bundle_path: Path) -> None:
+    """Remove unnecessary files from the app bundle to reduce size."""
+    # Patterns to remove (Qt frameworks and files we don't need)
+    # We only need: QtCore, QtGui, QtWidgets, QtSvg, QtDBus, QtNetwork (for API calls)
+    remove_patterns = [
+        # Massive WebEngine (280MB+)
+        "QtWebEngine*",
+        # PDF support (8MB)
+        "QtPdf*",
+        # QML/Quick (we use widgets) - many MB
+        "QtQml*",
+        "QtQuick*",
+        # 3D modules
+        "Qt3D*",
+        # Designer tools
+        "QtDesigner*",
+        # Multimedia
+        "QtMultimedia*",
+        "QtSpatialAudio*",
+        # Other unused
+        "QtBluetooth*",
+        "QtCharts*",
+        "QtDataVisualization*",
+        "QtGraphs*",
+        "QtLocation*",
+        "QtNfc*",
+        "QtPositioning*",
+        "QtRemoteObjects*",
+        "QtSensors*",
+        "QtSerialBus*",
+        "QtSerialPort*",
+        "QtShaderTools*",
+        "QtSql*",
+        "QtTest*",
+        "QtVirtualKeyboard*",
+        "QtWebChannel*",
+        "QtWebSockets*",
+        "QtTextToSpeech*",
+        "QtHttpServer*",
+        "QtScxml*",
+        "QtStateMachine*",
+        # OpenGL (not needed for basic widgets)
+        "QtOpenGL*",
+    ]
+
+    # Directories to completely remove
+    remove_dirs = [
+        "PySide6/Qt/qml",  # QML files (~19MB)
+        "PySide6/Qt/translations",  # Translation files (~15MB)
+        "PySide6/Qt/metatypes",  # Meta type info (~14MB)
+        "PySide6/Assistant.app",
+        "PySide6/Assistant__dot__app",
+        "PySide6/Linguist.app",
+        "PySide6/Linguist__dot__app",
+        "PySide6/Designer.app",
+        "PySide6/Designer__dot__app",
+        "PySide6/include",  # Header files
+        "PySide6/typesystems",  # Type system files
+        "PySide6/glue",  # Glue code
+        # Dev tools that leaked in
+        "mypy",
+        "pytest",
+        "ruff",
+        "black",
+    ]
+
+    frameworks_dir = bundle_path / "Contents" / "Frameworks"
+    if not frameworks_dir.exists():
+        # Try alternate location for non-macOS
+        frameworks_dir = bundle_path / "_internal" if (bundle_path / "_internal").exists() else bundle_path
+        if not frameworks_dir.exists():
+            return
+
+    removed_size = 0
+
+    # Remove Qt frameworks matching patterns
+    qt_lib_dir = frameworks_dir / "PySide6" / "Qt" / "lib"
+    if qt_lib_dir.exists():
+        import fnmatch
+        for pattern in remove_patterns:
+            for item in qt_lib_dir.iterdir():
+                if fnmatch.fnmatch(item.name, pattern) or fnmatch.fnmatch(item.name, f"{pattern}.framework"):
+                    if item.exists() or item.is_symlink():
+                        if item.is_symlink():
+                            item.unlink()
+                            print(f"  Removed symlink: {item.name}")
+                        elif item.is_dir():
+                            size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
+                            removed_size += size
+                            shutil.rmtree(item)
+                            print(f"  Removed: {item.name} ({size / 1024 / 1024:.1f} MB)")
+                        else:
+                            size = item.stat().st_size
+                            removed_size += size
+                            item.unlink()
+                            print(f"  Removed: {item.name} ({size / 1024 / 1024:.1f} MB)")
+
+    # Remove Qt plugins we don't need
+    qt_plugins_dir = frameworks_dir / "PySide6" / "Qt" / "plugins"
+    if qt_plugins_dir.exists():
+        plugins_to_remove = [
+            "multimedia", "qmltooling", "scenegraph", "qmllint",
+            "designer", "sqldrivers", "webview", "position",
+            "sensors", "texttospeech", "canbus", "virtualkeyboard",
+            "geometryloaders", "sceneparsers", "renderers",
+        ]
+        for plugin_name in plugins_to_remove:
+            plugin_dir = qt_plugins_dir / plugin_name
+            if plugin_dir.exists() or plugin_dir.is_symlink():
+                if plugin_dir.is_symlink():
+                    plugin_dir.unlink()
+                    print(f"  Removed plugin symlink: {plugin_name}")
+                else:
+                    size = sum(f.stat().st_size for f in plugin_dir.rglob("*") if f.is_file())
+                    removed_size += size
+                    shutil.rmtree(plugin_dir)
+                    print(f"  Removed plugin: {plugin_name} ({size / 1024 / 1024:.1f} MB)")
+
+    # Remove complete directories
+    for dir_pattern in remove_dirs:
+        dir_path = frameworks_dir / dir_pattern
+        if dir_path.exists() or dir_path.is_symlink():
+            if dir_path.is_symlink():
+                dir_path.unlink()
+                print(f"  Removed symlink: {dir_pattern}")
+            else:
+                size = sum(f.stat().st_size for f in dir_path.rglob("*") if f.is_file())
+                removed_size += size
+                shutil.rmtree(dir_path)
+                print(f"  Removed: {dir_pattern} ({size / 1024 / 1024:.1f} MB)")
+
+    print(f"\nTotal removed: {removed_size / 1024 / 1024:.1f} MB")
+
+
 def get_target_triple() -> str:
     """Determine the target triple for the current platform."""
     machine = platform.machine().lower()
@@ -213,29 +347,25 @@ def build() -> None:
             else:
                 icon_path = None
 
-    # Large PySide6/Qt modules we don't need
+    # Modules to exclude from the build
     excluded_modules = [
-        # Web engine is huge (~200MB)
+        # Large PySide6/Qt modules we don't need
         "PySide6.QtWebEngine",
         "PySide6.QtWebEngineCore",
         "PySide6.QtWebEngineWidgets",
         "PySide6.QtWebChannel",
-        # 3D modules
         "PySide6.Qt3DCore",
         "PySide6.Qt3DRender",
         "PySide6.Qt3DInput",
         "PySide6.Qt3DLogic",
         "PySide6.Qt3DAnimation",
         "PySide6.Qt3DExtras",
-        # Multimedia
         "PySide6.QtMultimedia",
         "PySide6.QtMultimediaWidgets",
-        # QML/Quick (we use widgets)
         "PySide6.QtQml",
         "PySide6.QtQuick",
         "PySide6.QtQuickWidgets",
         "PySide6.QtQuickControls2",
-        # Other unused modules
         "PySide6.QtBluetooth",
         "PySide6.QtNfc",
         "PySide6.QtPositioning",
@@ -265,6 +395,15 @@ def build() -> None:
         "PySide6.QtTextToSpeech",
         "PySide6.QtSerialBus",
         "PySide6.QtShaderTools",
+        # Dev tools that shouldn't be bundled
+        "mypy",
+        "pytest",
+        "ruff",
+        "black",
+        # Not needed at runtime
+        "PIL",
+        "pillow",
+        "numpy.testing",
     ]
 
     # Base PyInstaller command
@@ -344,6 +483,14 @@ def build() -> None:
             if final_output.exists():
                 shutil.rmtree(final_output)
             app_bundle.rename(final_output)
+
+            # Clean up unnecessary Qt frameworks to reduce size
+            print("\nCleaning up unnecessary files...")
+            cleanup_bundle(final_output)
+
+            # Calculate and show final size
+            total_size = sum(f.stat().st_size for f in final_output.rglob("*") if f.is_file())
+            print(f"\nFinal app size: {total_size / 1024 / 1024:.1f} MB")
 
             # Also create a zip for distribution
             zip_path = dist_dir / f"{APP_NAME}-{target_triple}"

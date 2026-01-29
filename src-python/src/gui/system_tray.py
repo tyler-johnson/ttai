@@ -9,6 +9,8 @@ from PySide6.QtGui import QAction, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from src.server.config import ServerConfig
+
 logger = logging.getLogger("ttai.gui")
 
 
@@ -70,14 +72,16 @@ class SystemTrayManager(QObject):
     show_window_requested = Signal()
     quit_requested = Signal()
 
-    def __init__(self, app: QApplication) -> None:
+    def __init__(self, app: QApplication, config: ServerConfig) -> None:
         """Initialize the system tray manager.
 
         Args:
             app: The QApplication instance.
+            config: Server configuration for URL generation.
         """
         super().__init__()
         self._app = app
+        self._config = config
         self._tray_icon: QSystemTrayIcon | None = None
         self._available = QSystemTrayIcon.isSystemTrayAvailable()
 
@@ -109,6 +113,10 @@ class SystemTrayManager(QObject):
 
         # Create context menu
         menu = QMenu()
+
+        copy_url_action = QAction("Copy MCP Server URL", menu)
+        copy_url_action.triggered.connect(self._on_copy_url)
+        menu.addAction(copy_url_action)
 
         show_action = QAction("Show Settings", menu)
         show_action.triggered.connect(self._on_show_requested)
@@ -147,6 +155,17 @@ class SystemTrayManager(QObject):
     def _on_quit_requested(self) -> None:
         """Handle quit menu action."""
         self.quit_requested.emit()
+
+    def _on_copy_url(self) -> None:
+        """Copy the MCP server URL to clipboard."""
+        if self._config.ssl_enabled:
+            url = f"https://{self._config.ssl_local_domain}:{self._config.ssl_port}/mcp"
+        else:
+            url = f"http://{self._config.host}:{self._config.port}/mcp"
+
+        clipboard = self._app.clipboard()
+        clipboard.setText(url)
+        logger.debug(f"Copied URL to clipboard: {url}")
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Handle tray icon activation.

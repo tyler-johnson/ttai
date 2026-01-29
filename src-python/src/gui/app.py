@@ -97,7 +97,7 @@ class TTAIApplication:
         )
 
         # Initialize system tray
-        self.tray_manager = SystemTrayManager(self.app)
+        self.tray_manager = SystemTrayManager(self.app, self.config)
         self.tray_manager.show_window_requested.connect(self._on_show_window)
         self.tray_manager.quit_requested.connect(self._on_quit_requested)
 
