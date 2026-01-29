@@ -313,13 +313,13 @@ Expected output:
 ```
 INFO ttai.ssl: Fetching certificate from https://api.tt-ai.dev/cert
 INFO ttai.ssl: Saved certificate for local.tt-ai.dev, expires 2025-04-28
-INFO ttai.server: Starting MCP server in HTTPS mode at https://local.tt-ai.dev:8443/mcp
+INFO ttai.server: Starting MCP server in HTTPS mode at https://local.tt-ai.dev:5181/mcp
 ```
 
 Test the HTTPS endpoint:
 
 ```bash
-curl https://local.tt-ai.dev:8443/api/health
+curl https://local.tt-ai.dev:5181/api/health
 ```
 
 ---
@@ -456,4 +456,4 @@ Let's Encrypt certificates are free.
 | Certificate validity   | 90 days (Let's Encrypt) |
 | Auto-renewal threshold | 30 days before expiry   |
 | Local server domain    | `local.tt-ai.dev`       |
-| Local server port      | `8443` (HTTPS)          |
+| Local server port      | `5181` (HTTPS)          |

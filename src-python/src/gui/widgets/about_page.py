@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QVBoxLayout, QWidget
 
+from src import __version__
+
 
 def _get_resources_dir() -> Path:
     """Get resources directory, handling PyInstaller frozen apps."""
@@ -92,7 +94,7 @@ class AboutPage(QScrollArea):
         layout.addSpacing(20)
 
         # Version
-        version = QLabel("Version 0.1.0")
+        version = QLabel(f"Version {__version__}")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version)
 

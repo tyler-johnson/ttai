@@ -24,7 +24,7 @@ cd src-python
 uv sync
 
 # Run Python commands through uv
-uv run python -m src.server.main --headless --port 8080
+uv run python -m src.server.main --headless --port 5180
 
 # Run tests
 uv run pytest tests/ -v
@@ -43,16 +43,16 @@ cd src-python
 uv run python -m src.server.main
 
 # Headless HTTP mode - for Claude Desktop
-uv run python -m src.server.main --headless --port 8080
+uv run python -m src.server.main --headless --port 5180
 
-# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:8443
+# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:5181
 TTAI_SSL_DOMAIN=tt-ai.dev uv run python -m src.server.main --headless
 
 # Stdio mode - for subprocess/sidecar integration
 uv run python -m src.server.main --headless --transport stdio
 
 # With debug logging
-TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --headless --port 8080
+TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --headless --port 5180
 ```
 
 ### Environment Variables
@@ -61,11 +61,11 @@ TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --headless --port 8080
 |----------|-------------|---------|
 | `TTAI_TRANSPORT` | Transport: `stdio` or `http` | `http` |
 | `TTAI_HOST` | HTTP host | `localhost` |
-| `TTAI_PORT` | HTTP port | `8080` |
+| `TTAI_PORT` | HTTP port | `5180` |
 | `TTAI_LOG_LEVEL` | Log level | `INFO` |
 | `TTAI_DATA_DIR` | Data directory | `~/.ttai` |
 | `TTAI_SSL_DOMAIN` | Base domain for SSL | `tt-ai.dev` |
-| `TTAI_SSL_PORT` | HTTPS port | `8443` |
+| `TTAI_SSL_PORT` | HTTPS port | `5181` |
 
 When `TTAI_SSL_DOMAIN` is set:
 - Cert API URL: `https://api.{TTAI_SSL_DOMAIN}/cert`

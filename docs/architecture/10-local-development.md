@@ -23,7 +23,7 @@ This guide covers prerequisites, project setup, and development workflows for bo
 │  │  ┌──────────────────────────┐  │     │                                │  │
 │  │  │      Vite Dev Server     │  │     │  ┌──────────────────────────┐  │  │
 │  │  │      localhost:5173      │  │     │  │     HTTP/SSE Server      │  │  │
-│  │  └──────────────────────────┘  │     │  │     localhost:8080       │  │  │
+│  │  └──────────────────────────┘  │     │  │     localhost:5180       │  │  │
 │  │              │                 │     │  └──────────────────────────┘  │  │
 │  │  ┌──────────────────────────┐  │     │              │                 │  │
 │  │  │      Tauri Window        │  │     │              │                 │  │
@@ -207,16 +207,16 @@ cd src-python
 source .venv/bin/activate
 
 # Run with HTTP/SSE transport
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 
 # With debug logging
-TTAI_LOG_LEVEL=DEBUG python -m src.server.main --transport sse --port 8080
+TTAI_LOG_LEVEL=DEBUG python -m src.server.main --transport sse --port 5180
 
 # Or use environment variables
-TTAI_TRANSPORT=sse TTAI_PORT=8080 python -m src.server.main
+TTAI_TRANSPORT=sse TTAI_PORT=5180 python -m src.server.main
 ```
 
-The server will be available at `http://localhost:8080/sse`.
+The server will be available at `http://localhost:5180/sse`.
 
 ### Connecting Claude Desktop
 
@@ -228,7 +228,7 @@ Configure Claude Desktop to connect to your local server:
 {
   "mcpServers": {
     "ttai-dev": {
-      "url": "http://localhost:8080/sse",
+      "url": "http://localhost:5180/sse",
       "description": "TTAI Development Server"
     }
   }
@@ -241,15 +241,15 @@ Restart Claude Desktop to pick up the configuration.
 
 ```bash
 # Check server health
-curl http://localhost:8080/health
+curl http://localhost:5180/health
 
 # List available tools
-curl -X POST http://localhost:8080/messages \
+curl -X POST http://localhost:5180/messages \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
 # Call a tool
-curl -X POST http://localhost:8080/messages \
+curl -X POST http://localhost:5180/messages \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_quote","arguments":{"symbol":"AAPL"}}}'
 ```
@@ -264,7 +264,7 @@ Create a `.env` file in `src-python/`:
 # Transport
 TTAI_TRANSPORT=sse
 TTAI_HOST=localhost
-TTAI_PORT=8080
+TTAI_PORT=5180
 
 # Data directory (separate from production)
 TTAI_DATA_DIR=~/.ttai-dev
@@ -407,7 +407,7 @@ cargo test -- --nocapture
       "type": "python",
       "request": "launch",
       "module": "src.server.main",
-      "args": ["--transport", "sse", "--port", "8080"],
+      "args": ["--transport", "sse", "--port", "5180"],
       "cwd": "${workspaceFolder}/src-python",
       "env": {
         "TTAI_LOG_LEVEL": "DEBUG"
@@ -491,10 +491,10 @@ async def my_new_tool(param1: str, param2: int = 10) -> list[TextContent]:
 
 ```bash
 # Start server
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 
 # Test the tool
-curl -X POST http://localhost:8080/messages \
+curl -X POST http://localhost:5180/messages \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_new_tool","arguments":{"param1":"test"}}}'
 ```
@@ -547,7 +547,7 @@ HTTPServer(('', 9000), Handler).serve_forever()
 
 # Terminal 2: Start TTAI server with webhook
 TTAI_WEBHOOK_URL=http://localhost:9000/webhook \
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 ```
 
 ### Updating Dependencies
@@ -590,11 +590,11 @@ cargo fmt
 
 #### "Address already in use" (Headless Mode)
 
-Another process is using port 8080:
+Another process is using port 5180:
 
 ```bash
 # Find the process
-lsof -i :8080
+lsof -i :5180
 
 # Use a different port
 python -m src.server.main --transport sse --port 8081

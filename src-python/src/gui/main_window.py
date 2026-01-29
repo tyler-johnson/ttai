@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPalette, QPixmap
+from PySide6.QtGui import QCloseEvent, QIcon, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -84,7 +84,6 @@ class MainWindow(QMainWindow):
         self._force_quit = False
 
         self._setup_window()
-        self._setup_menu()
         self._setup_toolbar()
         self._setup_ui()
 
@@ -101,23 +100,6 @@ class MainWindow(QMainWindow):
 
         # Unified title bar on macOS
         self.setUnifiedTitleAndToolBarOnMac(True)
-
-    def _setup_menu(self) -> None:
-        """Set up the menu bar."""
-        menubar = self.menuBar()
-
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-
-        docs_action = QAction("Documentation", self)
-        docs_action.triggered.connect(self._open_docs)
-        help_menu.addAction(docs_action)
-
-        help_menu.addSeparator()
-
-        about_action = QAction("About TTAI", self)
-        about_action.triggered.connect(lambda: self._select_tab(2))
-        help_menu.addAction(about_action)
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar with centered tab-style buttons."""
@@ -229,13 +211,6 @@ class MainWindow(QMainWindow):
         else:
             self.about_btn.setChecked(True)
         self.content_stack.setCurrentIndex(index)
-
-    def _open_docs(self) -> None:
-        """Open documentation URL."""
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
-        QDesktopServices.openUrl(QUrl("https://github.com/your-repo/ttai"))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override
         """Handle window close event.

@@ -482,7 +482,7 @@ import uvicorn
 class SseTransportManager:
     """Manages HTTP/SSE transport for headless mode."""
 
-    def __init__(self, server, host: str = "localhost", port: int = 8080):
+    def __init__(self, server, host: str = "localhost", port: int = 5180):
         self.server = server
         self.host = host
         self.port = port
@@ -535,7 +535,7 @@ To connect Claude Desktop to the headless TTAI server:
 {
   "mcpServers": {
     "ttai": {
-      "url": "http://localhost:8080/sse",
+      "url": "http://localhost:5180/sse",
       "description": "TTAI Trading Analysis Server"
     }
   }
@@ -553,7 +553,7 @@ from sseclient import SSEClient
 class TtaiClient:
     """Simple client for the TTAI MCP server."""
 
-    def __init__(self, base_url: str = "http://localhost:8080"):
+    def __init__(self, base_url: str = "http://localhost:5180"):
         self.base_url = base_url
         self.client = httpx.Client()
         self.request_id = 0
@@ -661,10 +661,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 export TTAI_API_KEY=your-secret-key
 
 # Start server
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 
 # Client request with authentication
-curl -X POST http://localhost:8080/messages \
+curl -X POST http://localhost:5180/messages \
   -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'

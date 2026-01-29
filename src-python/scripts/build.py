@@ -15,10 +15,70 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Application name
 APP_NAME = "TTAI"
+
+# Icon sizes required for macOS .icns
+ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024]
+
+
+def create_icns(png_path: Path, output_path: Path) -> bool:
+    """Create macOS .icns file from PNG using sips and iconutil."""
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            iconset_dir = Path(tmpdir) / "icon.iconset"
+            iconset_dir.mkdir()
+
+            # Generate all required sizes
+            for size in ICNS_SIZES:
+                # Standard resolution
+                out_file = iconset_dir / f"icon_{size}x{size}.png"
+                subprocess.run(
+                    ["sips", "-z", str(size), str(size), str(png_path), "--out", str(out_file)],
+                    capture_output=True,
+                    check=True,
+                )
+                # Retina (@2x) - only for sizes up to 512
+                if size <= 512:
+                    out_file_2x = iconset_dir / f"icon_{size}x{size}@2x.png"
+                    size_2x = size * 2
+                    subprocess.run(
+                        ["sips", "-z", str(size_2x), str(size_2x), str(png_path), "--out", str(out_file_2x)],
+                        capture_output=True,
+                        check=True,
+                    )
+
+            # Convert iconset to icns
+            subprocess.run(
+                ["iconutil", "-c", "icns", str(iconset_dir), "-o", str(output_path)],
+                capture_output=True,
+                check=True,
+            )
+            return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"Warning: Could not create .icns file: {e}")
+        return False
+
+
+def create_ico(png_path: Path, output_path: Path) -> bool:
+    """Create Windows .ico file from PNG using Pillow."""
+    try:
+        from PIL import Image
+
+        img = Image.open(png_path)
+        # Windows ico typically includes these sizes
+        sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+        img.save(output_path, format="ICO", sizes=sizes)
+        return True
+    except ImportError:
+        print("Warning: Pillow not installed, cannot create .ico file")
+        return False
+    except Exception as e:
+        print(f"Warning: Could not create .ico file: {e}")
+        return False
 
 
 def get_target_triple() -> str:
@@ -107,6 +167,12 @@ def get_hidden_imports() -> list[str]:
         "json",
         # Logging
         "logging.handlers",
+        # pyobjc for macOS integration
+        "objc",
+        "AppKit",
+        "Foundation",
+        "Cocoa",
+        "PyObjCTools",
     ]
 
 
@@ -121,12 +187,85 @@ def build() -> None:
     resources_dir = src_python_dir / "src" / "gui" / "resources"
     dist_dir = src_python_dir / "dist"
     build_dir = src_python_dir / "build"
+    icon_png = resources_dir / "icon.png"
 
     # Path separator for --add-data differs by platform
     path_sep = ";" if system == "windows" else ":"
 
     print(f"Building {APP_NAME} for {target_triple}...")
     print(f"Entry point: {entry_point}")
+
+    # Generate platform-specific icon
+    icon_path: Path | None = None
+    if icon_png.exists():
+        if system == "darwin":
+            icon_path = build_dir / "icon.icns"
+            build_dir.mkdir(parents=True, exist_ok=True)
+            if create_icns(icon_png, icon_path):
+                print(f"Created macOS icon: {icon_path}")
+            else:
+                icon_path = None
+        elif system == "windows":
+            icon_path = build_dir / "icon.ico"
+            build_dir.mkdir(parents=True, exist_ok=True)
+            if create_ico(icon_png, icon_path):
+                print(f"Created Windows icon: {icon_path}")
+            else:
+                icon_path = None
+
+    # Large PySide6/Qt modules we don't need
+    excluded_modules = [
+        # Web engine is huge (~200MB)
+        "PySide6.QtWebEngine",
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebChannel",
+        # 3D modules
+        "PySide6.Qt3DCore",
+        "PySide6.Qt3DRender",
+        "PySide6.Qt3DInput",
+        "PySide6.Qt3DLogic",
+        "PySide6.Qt3DAnimation",
+        "PySide6.Qt3DExtras",
+        # Multimedia
+        "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets",
+        # QML/Quick (we use widgets)
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickWidgets",
+        "PySide6.QtQuickControls2",
+        # Other unused modules
+        "PySide6.QtBluetooth",
+        "PySide6.QtNfc",
+        "PySide6.QtPositioning",
+        "PySide6.QtLocation",
+        "PySide6.QtSensors",
+        "PySide6.QtSerialPort",
+        "PySide6.QtWebSockets",
+        "PySide6.QtPdf",
+        "PySide6.QtPdfWidgets",
+        "PySide6.QtCharts",
+        "PySide6.QtDataVisualization",
+        "PySide6.QtNetworkAuth",
+        "PySide6.QtRemoteObjects",
+        "PySide6.QtScxml",
+        "PySide6.QtSql",
+        "PySide6.QtTest",
+        "PySide6.QtXml",
+        "PySide6.QtDesigner",
+        "PySide6.QtHelp",
+        "PySide6.QtOpenGL",
+        "PySide6.QtOpenGLWidgets",
+        "PySide6.QtStateMachine",
+        "PySide6.QtUiTools",
+        "PySide6.QtSpatialAudio",
+        "PySide6.QtHttpServer",
+        "PySide6.QtVirtualKeyboard",
+        "PySide6.QtTextToSpeech",
+        "PySide6.QtSerialBus",
+        "PySide6.QtShaderTools",
+    ]
 
     # Base PyInstaller command
     cmd = [
@@ -135,7 +274,7 @@ def build() -> None:
         "--distpath", str(dist_dir),
         "--workpath", str(build_dir),
         "--specpath", str(build_dir),
-        # Collect all PySide6 components
+        # Collect PySide6 but we'll exclude unused modules
         "--collect-all", "PySide6",
         # Add GUI resources
         "--add-data", f"{resources_dir}{path_sep}src/gui/resources",
@@ -144,12 +283,24 @@ def build() -> None:
         "--noconfirm",
     ]
 
+    # Exclude large unused modules
+    for module in excluded_modules:
+        cmd.extend(["--exclude-module", module])
+
+    # Add icon if available
+    if icon_path and icon_path.exists():
+        cmd.extend(["--icon", str(icon_path)])
+
     # Platform-specific options
     if system == "darwin":
         # macOS: Create .app bundle
         cmd.extend([
             "--windowed",  # Creates .app bundle
             "--onedir",    # Required for .app structure
+            # Collect pyobjc for macOS integration (tray, dock hiding)
+            "--collect-submodules", "objc",
+            "--collect-submodules", "AppKit",
+            "--collect-submodules", "Foundation",
         ])
         output_desc = f"{APP_NAME}.app bundle"
     elif system == "windows":

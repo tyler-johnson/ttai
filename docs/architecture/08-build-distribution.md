@@ -88,13 +88,13 @@ cd src-python
 source .venv/bin/activate
 
 # Run with HTTP/SSE transport (headless mode)
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 
 # Or use environment variables
-TTAI_TRANSPORT=sse TTAI_PORT=8080 python -m src.server.main
+TTAI_TRANSPORT=sse TTAI_PORT=5180 python -m src.server.main
 ```
 
-The server will start and listen on `http://localhost:8080/sse` for MCP client connections.
+The server will start and listen on `http://localhost:5180/sse` for MCP client connections.
 
 ### Connecting External MCP Clients
 
@@ -106,7 +106,7 @@ Add to your Claude Desktop MCP config (`~/.config/claude/mcp.json` or equivalent
 {
   "mcpServers": {
     "ttai": {
-      "url": "http://localhost:8080/sse"
+      "url": "http://localhost:5180/sse"
     }
   }
 }
@@ -114,7 +114,7 @@ Add to your Claude Desktop MCP config (`~/.config/claude/mcp.json` or equivalent
 
 #### Custom MCP Clients
 
-Connect to the SSE endpoint at `http://localhost:8080/sse` and send messages to `http://localhost:8080/messages`.
+Connect to the SSE endpoint at `http://localhost:5180/sse` and send messages to `http://localhost:5180/messages`.
 
 ### Environment Configuration
 
@@ -126,7 +126,7 @@ Create a `.env` file in `src-python/` for headless configuration:
 # Transport configuration
 TTAI_TRANSPORT=sse
 TTAI_HOST=localhost
-TTAI_PORT=8080
+TTAI_PORT=5180
 
 # Data directory
 TTAI_DATA_DIR=~/.ttai
@@ -835,7 +835,7 @@ source .venv/bin/activate
 pip install -e .
 
 # Run headless server
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 ```
 
 ## Cross-References

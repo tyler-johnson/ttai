@@ -18,10 +18,10 @@ The server can run in either mode, selected via CLI arguments or environment var
 python -m src.server.main
 
 # Headless mode (HTTP/SSE transport)
-python -m src.server.main --transport sse --port 8080
+python -m src.server.main --transport sse --port 5180
 
 # Or via environment variables
-TTAI_TRANSPORT=sse TTAI_PORT=8080 python -m src.server.main
+TTAI_TRANSPORT=sse TTAI_PORT=5180 python -m src.server.main
 ```
 
 ### Mode Comparison
@@ -42,7 +42,7 @@ python -m src.server.main [OPTIONS]
 Options:
   --transport {stdio,sse}  Transport protocol (default: stdio)
   --host HOST              Host for SSE transport (default: localhost)
-  --port PORT              Port for SSE transport (default: 8080)
+  --port PORT              Port for SSE transport (default: 5180)
   --log-level LEVEL        Logging level (default: INFO)
   --data-dir PATH          Data directory (default: ~/.ttai)
 ```
@@ -53,7 +53,7 @@ Options:
 |----------|-------------|---------|
 | `TTAI_TRANSPORT` | Transport: `stdio` or `sse` | `stdio` |
 | `TTAI_HOST` | SSE host | `localhost` |
-| `TTAI_PORT` | SSE port | `8080` |
+| `TTAI_PORT` | SSE port | `5180` |
 | `TTAI_LOG_LEVEL` | Log level | `INFO` |
 | `TTAI_DATA_DIR` | Data directory | `~/.ttai` |
 | `TTAI_NOTIFICATION_BACKEND` | `auto`, `tauri`, or `webhook` | `auto` |
@@ -496,8 +496,8 @@ async def async_main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("TTAI_PORT", "8080")),
-        help="Port for SSE transport (default: 8080)"
+        default=int(os.getenv("TTAI_PORT", "5180")),
+        help="Port for SSE transport (default: 5180)"
     )
     parser.add_argument(
         "--log-level",

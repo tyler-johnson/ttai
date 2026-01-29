@@ -125,7 +125,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
 
-async def run_sse(host: str = "localhost", port: int = 8080):
+async def run_sse(host: str = "localhost", port: int = 5180):
     """Run the MCP server with HTTP/SSE transport."""
     server = await create_server()
     sse = SseServerTransport("/messages")
@@ -177,8 +177,8 @@ async def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("TTAI_PORT", "8080")),
-        help="Port for SSE transport (default: 8080)"
+        default=int(os.getenv("TTAI_PORT", "5180")),
+        help="Port for SSE transport (default: 5180)"
     )
     args = parser.parse_args()
 
@@ -215,7 +215,7 @@ class ServerConfig:
     # Transport settings
     transport: str = "stdio"  # "stdio" or "sse"
     host: str = "localhost"
-    port: int = 8080
+    port: int = 5180
 
     # Cache settings
     quote_cache_ttl: int = 60  # seconds
@@ -253,7 +253,7 @@ class ServerConfig:
             log_level=os.getenv("TTAI_LOG_LEVEL", "INFO"),
             transport=os.getenv("TTAI_TRANSPORT", "stdio"),
             host=os.getenv("TTAI_HOST", "localhost"),
-            port=int(os.getenv("TTAI_PORT", "8080")),
+            port=int(os.getenv("TTAI_PORT", "5180")),
             tastytrade_api_url=os.getenv("TASTYTRADE_API_URL", "https://api.tastyworks.com"),
             notification_backend=os.getenv("TTAI_NOTIFICATION_BACKEND", "auto"),
             webhook_url=os.getenv("TTAI_WEBHOOK_URL"),

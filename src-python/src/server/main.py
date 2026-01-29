@@ -224,7 +224,7 @@ def parse_args() -> argparse.Namespace:
         "--port",
         type=int,
         default=None,
-        help="Port to bind to for HTTP mode (default: from TTAI_PORT env or 8080)",
+        help="Port to bind to for HTTP mode (default: from TTAI_PORT env or 5180)",
     )
     parser.add_argument(
         "--log-level",
@@ -246,7 +246,7 @@ def parse_args() -> argparse.Namespace:
         "--ssl-port",
         type=int,
         default=None,
-        help="Port for HTTPS mode (default: from TTAI_SSL_PORT env or 8443)",
+        help="Port for HTTPS mode (default: from TTAI_SSL_PORT env or 5181)",
     )
     return parser.parse_args()
 
