@@ -10,10 +10,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             arch: arm64
             goarch: arm64
-          - os: macos-13
+          - os: macos-15
             arch: amd64
             goarch: amd64
 
@@ -80,7 +80,7 @@ jobs:
         working-directory: src-go
         shell: bash
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
           GOOS: windows
           GOARCH: amd64
         run: |
