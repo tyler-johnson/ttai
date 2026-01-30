@@ -12,7 +12,6 @@ import (
 	"github.com/ttai/ttai/internal/config"
 )
 
-
 func main() {
 	// Parse command line arguments
 	headless := flag.Bool("headless", false, "Run as headless MCP server (no GUI)")
@@ -23,7 +22,6 @@ func main() {
 	dataDir := flag.String("data-dir", "", "Data directory (default: from env or ~/.ttai)")
 	sslDomain := flag.String("ssl-domain", "", "Base domain for SSL (e.g., tt-ai.dev)")
 	sslPort := flag.Int("ssl-port", 0, "Port for HTTPS mode (default: from env or 5181)")
-	softwareRender := flag.Bool("software-render", false, "Force software rendering (no OpenGL)")
 
 	flag.Parse()
 
@@ -61,7 +59,7 @@ func main() {
 
 	// Create and run application
 	application := app.NewApplication(cfg)
-	exitCode := application.Run(*headless, *softwareRender)
+	exitCode := application.Run(*headless)
 
 	os.Exit(exitCode)
 }

@@ -27,16 +27,15 @@ import (
 
 // Application represents the TTAI application.
 type Application struct {
-	cfg            *config.Config
-	fyneApp        fyne.App
-	mainWindow     *ui.MainWindow
-	trayManager    *ui.TrayManager
-	appState       *state.AppState
-	prefs          *state.Preferences
-	client         *tastytrade.Client
-	mcpServer      *mcp.Server
-	httpServer     *http.Server
-	softwareRender bool
+	cfg         *config.Config
+	fyneApp     fyne.App
+	mainWindow  *ui.MainWindow
+	trayManager *ui.TrayManager
+	appState    *state.AppState
+	prefs       *state.Preferences
+	client      *tastytrade.Client
+	mcpServer   *mcp.Server
+	httpServer  *http.Server
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -54,8 +53,7 @@ func NewApplication(cfg *config.Config) *Application {
 }
 
 // Run starts the application.
-func (a *Application) Run(headless bool, softwareRender bool) int {
-	a.softwareRender = softwareRender
+func (a *Application) Run(headless bool) int {
 	// Ensure data directory exists
 	if err := a.cfg.EnsureDataDir(); err != nil {
 		log.Printf("Failed to create data directory: %v", err)
@@ -178,9 +176,6 @@ func (a *Application) runHTTPServer() int {
 }
 
 func (a *Application) runGUI() int {
-	// Configure renderer (may switch to software on Windows VMs/RDP)
-	ConfigureRenderer(a.softwareRender)
-
 	// Create Fyne app
 	a.fyneApp = fyneapp.NewWithID("dev.tt-ai.ttai")
 
