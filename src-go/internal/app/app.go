@@ -176,6 +176,9 @@ func (a *Application) runHTTPServer() int {
 }
 
 func (a *Application) runGUI() int {
+	// Configure renderer (may switch to software on Windows VMs/RDP)
+	ConfigureRenderer()
+
 	// Create Fyne app
 	a.fyneApp = fyneapp.NewWithID("dev.tt-ai.ttai")
 

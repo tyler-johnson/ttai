@@ -12,6 +12,7 @@ import (
 	"github.com/ttai/ttai/internal/config"
 )
 
+
 func main() {
 	// Parse command line arguments
 	headless := flag.Bool("headless", false, "Run as headless MCP server (no GUI)")
