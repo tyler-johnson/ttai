@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"log"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
@@ -86,8 +88,11 @@ func (m *MainWindow) setupCloseHandler() {
 
 // Show displays and activates the window.
 func (m *MainWindow) Show() {
+	log.Println("MainWindow.Show() called")
+	m.window.CenterOnScreen()
 	m.window.Show()
 	m.window.RequestFocus()
+	log.Println("MainWindow.Show() completed")
 }
 
 // Hide hides the window.

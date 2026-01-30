@@ -224,7 +224,10 @@ func (a *Application) setupFyneTray() {
 	a.trayManager = ui.NewTrayManager(
 		a.fyneApp,
 		a.cfg,
-		func() { a.mainWindow.Show() },
+		func() {
+			log.Println("Tray: Show Settings clicked")
+			a.mainWindow.Show()
+		},
 		func() { a.quit() },
 	)
 	a.trayManager.SetWindow(a.mainWindow.Window())
