@@ -104,14 +104,14 @@ zip-darwin: zip-darwin-arm64 zip-darwin-amd64
 WINDOWS_BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION) -H windowsgui"
 
 build-windows:
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(WINDOWS_BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build $(WINDOWS_BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
 
 # =============================================================================
 # Linux Build
 # =============================================================================
 
 build-linux:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-linux .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-linux .
 
 # =============================================================================
 # Development Commands
