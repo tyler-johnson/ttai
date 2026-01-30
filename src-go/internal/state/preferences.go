@@ -1,0 +1,228 @@
+package state
+
+import (
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+
+	"fyne.io/fyne/v2"
+)
+
+// Preferences manages application preferences.
+type Preferences struct {
+	app fyne.App
+}
+
+// NewPreferences creates a new preferences manager.
+func NewPreferences(app fyne.App) *Preferences {
+	return &Preferences{app: app}
+}
+
+// ShowWindowOnLaunch returns whether to show the window on launch.
+func (p *Preferences) ShowWindowOnLaunch() bool {
+	return p.app.Preferences().BoolWithFallback("show_window_on_launch", true)
+}
+
+// SetShowWindowOnLaunch sets whether to show the window on launch.
+func (p *Preferences) SetShowWindowOnLaunch(show bool) {
+	p.app.Preferences().SetBool("show_window_on_launch", show)
+}
+
+// IsFirstRun returns whether this is the first run of the application.
+func (p *Preferences) IsFirstRun() bool {
+	return p.app.Preferences().BoolWithFallback("is_first_run", true)
+}
+
+// SetFirstRunComplete marks the first run as complete.
+func (p *Preferences) SetFirstRunComplete() {
+	p.app.Preferences().SetBool("is_first_run", false)
+}
+
+// --- Launch at Startup ---
+
+// IsLaunchAtStartupEnabled checks if launch at startup is enabled.
+func IsLaunchAtStartupEnabled() bool {
+	switch runtime.GOOS {
+	case "darwin":
+		return isLaunchAtStartupMacOS()
+	case "windows":
+		return isLaunchAtStartupWindows()
+	case "linux":
+		return isLaunchAtStartupLinux()
+	default:
+		return false
+	}
+}
+
+// SetLaunchAtStartup enables or disables launch at startup.
+func SetLaunchAtStartup(enabled bool) bool {
+	switch runtime.GOOS {
+	case "darwin":
+		return setLaunchAtStartupMacOS(enabled)
+	case "windows":
+		return setLaunchAtStartupWindows(enabled)
+	case "linux":
+		return setLaunchAtStartupLinux(enabled)
+	default:
+		log.Printf("Launch at startup not supported on %s", runtime.GOOS)
+		return false
+	}
+}
+
+// IsPlatformSupported returns whether launch at startup is supported on this platform.
+func IsPlatformSupported() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows" || runtime.GOOS == "linux"
+}
+
+// --- macOS ---
+
+func getMacOSLaunchAgentPath() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, "Library", "LaunchAgents", "dev.tt-ai.ttai.plist")
+}
+
+func isLaunchAtStartupMacOS() bool {
+	_, err := os.Stat(getMacOSLaunchAgentPath())
+	return err == nil
+}
+
+func setLaunchAtStartupMacOS(enabled bool) bool {
+	plistPath := getMacOSLaunchAgentPath()
+
+	if enabled {
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Printf("Failed to get executable path: %v", err)
+			return false
+		}
+
+		// Ensure directory exists
+		dir := filepath.Dir(plistPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Printf("Failed to create LaunchAgents directory: %v", err)
+			return false
+		}
+
+		plistContent := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.tt-ai.ttai</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>` + exePath + `</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+`
+		if err := os.WriteFile(plistPath, []byte(plistContent), 0644); err != nil {
+			log.Printf("Failed to write launch agent: %v", err)
+			return false
+		}
+		log.Printf("Created launch agent at %s", plistPath)
+		return true
+	} else {
+		if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to remove launch agent: %v", err)
+			return false
+		}
+		log.Printf("Removed launch agent at %s", plistPath)
+		return true
+	}
+}
+
+// --- Windows ---
+
+func isLaunchAtStartupWindows() bool {
+	// Use reg query to check if the key exists
+	cmd := exec.Command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "TTAI")
+	err := cmd.Run()
+	return err == nil
+}
+
+func setLaunchAtStartupWindows(enabled bool) bool {
+	if enabled {
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Printf("Failed to get executable path: %v", err)
+			return false
+		}
+
+		cmd := exec.Command("reg", "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+			"/v", "TTAI", "/t", "REG_SZ", "/d", `"`+exePath+`"`, "/f")
+		if err := cmd.Run(); err != nil {
+			log.Printf("Failed to add registry key: %v", err)
+			return false
+		}
+		log.Println("Added TTAI to Windows startup registry")
+		return true
+	} else {
+		cmd := exec.Command("reg", "delete", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+			"/v", "TTAI", "/f")
+		if err := cmd.Run(); err != nil {
+			log.Printf("Failed to remove registry key: %v", err)
+			return false
+		}
+		log.Println("Removed TTAI from Windows startup registry")
+		return true
+	}
+}
+
+// --- Linux ---
+
+func getLinuxAutostartPath() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".config", "autostart", "ttai.desktop")
+}
+
+func isLaunchAtStartupLinux() bool {
+	_, err := os.Stat(getLinuxAutostartPath())
+	return err == nil
+}
+
+func setLaunchAtStartupLinux(enabled bool) bool {
+	desktopPath := getLinuxAutostartPath()
+
+	if enabled {
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Printf("Failed to get executable path: %v", err)
+			return false
+		}
+
+		// Ensure directory exists
+		dir := filepath.Dir(desktopPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Printf("Failed to create autostart directory: %v", err)
+			return false
+		}
+
+		desktopContent := `[Desktop Entry]
+Type=Application
+Name=TTAI
+Comment=TastyTrade AI Assistant
+Exec=` + exePath + `
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+`
+		if err := os.WriteFile(desktopPath, []byte(desktopContent), 0644); err != nil {
+			log.Printf("Failed to write autostart entry: %v", err)
+			return false
+		}
+		log.Printf("Created autostart entry at %s", desktopPath)
+		return true
+	} else {
+		if err := os.Remove(desktopPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to remove autostart entry: %v", err)
+			return false
+		}
+		log.Printf("Removed autostart entry at %s", desktopPath)
+		return true
+	}
+}

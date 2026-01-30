@@ -1,0 +1,10 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="currentColor"
+>
+  <!-- Pulse/heartbeat line as filled outline shape -->
+  <path d="M1 11h4.28l2.55-6.8a1 1 0 011.89.08L13 17.38l2.28-6.08a1 1 0 01.94-.65H23v2h-6.28l-2.55 6.8a1 1 0 01-1.89-.08L9 6.62l-2.28 6.08a1 1 0 01-.94.65H1v-2z" />
+</svg>
