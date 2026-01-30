@@ -3,6 +3,7 @@ package resources
 
 import (
 	_ "embed"
+	"runtime"
 
 	"fyne.io/fyne/v2"
 )
@@ -21,8 +22,12 @@ func Icon() fyne.Resource {
 	return fyne.NewStaticResource("icon.png", iconBytes)
 }
 
-// TrayIcon returns the system tray icon resource (monochrome SVG).
+// TrayIcon returns the system tray icon resource.
+// Returns SVG on macOS/Linux, PNG on Windows (Windows doesn't support SVG in system tray).
 func TrayIcon() fyne.Resource {
+	if runtime.GOOS == "windows" {
+		return fyne.NewStaticResource("tray_template.png", trayTemplatePNGBytes)
+	}
 	return fyne.NewStaticResource("pulse.svg", trayIconBytes)
 }
 

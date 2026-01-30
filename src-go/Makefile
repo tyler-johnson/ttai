@@ -1,5 +1,8 @@
 # TTAI Go Build Makefile
 
+# Use bash for cross-platform compatibility (available via Git for Windows on Windows)
+SHELL := bash
+
 APP_NAME := ttai
 DISPLAY_NAME := TTAI
 VERSION := 1.0.0
@@ -97,8 +100,11 @@ zip-darwin: zip-darwin-arm64 zip-darwin-amd64
 # Windows Build
 # =============================================================================
 
+# Windows build flags: -H windowsgui hides the console window
+WINDOWS_BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION) -H windowsgui"
+
 build-windows:
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(WINDOWS_BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
 
 # =============================================================================
 # Linux Build
