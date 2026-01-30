@@ -13,7 +13,8 @@ import (
 	"github.com/ttai/ttai/resources"
 )
 
-// TrayManager manages the system tray icon and menu.
+// TrayManager manages the system tray icon and menu using Fyne.
+// On macOS, use NativeTray instead for better compatibility with menu bar managers.
 type TrayManager struct {
 	app    fyne.App
 	cfg    *config.Config
@@ -110,12 +111,3 @@ func GetClipboardContent() string {
 	return clipboardContent
 }
 
-// HideFromDock hides the application from the dock on macOS.
-// This is called during app startup for tray-only mode.
-func HideFromDock() {
-	if runtime.GOOS == "darwin" {
-		// On macOS, we would use NSApplicationActivationPolicyAccessory
-		// but Fyne handles this automatically when using system tray
-		log.Println("macOS: App will be hidden from dock when using system tray")
-	}
-}

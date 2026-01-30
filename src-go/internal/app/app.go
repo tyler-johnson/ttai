@@ -179,6 +179,13 @@ func (a *Application) runGUI() int {
 	// Create Fyne app
 	a.fyneApp = fyneapp.NewWithID("dev.tt-ai.ttai")
 
+	// Hide from dock on macOS (tray-only app)
+	// Call once now and again after app starts (Fyne may reset the policy)
+	ui.HideFromDock()
+	a.fyneApp.Lifecycle().SetOnStarted(func() {
+		ui.HideFromDock()
+	})
+
 	// Load icon
 	icon := loadIcon()
 
@@ -193,15 +200,8 @@ func (a *Application) runGUI() int {
 	// Create main window
 	a.mainWindow = ui.NewMainWindow(a.fyneApp, a.cfg, a.client, a.appState, a.prefs, icon)
 
-	// Create system tray
-	a.trayManager = ui.NewTrayManager(
-		a.fyneApp,
-		a.cfg,
-		func() { a.mainWindow.Show() },
-		func() { a.quit() },
-	)
-	a.trayManager.SetWindow(a.mainWindow.Window())
-	a.trayManager.Setup()
+	// Create system tray using Fyne
+	a.setupFyneTray()
 
 	// Start HTTP server in background
 	go a.runHTTPServer()
@@ -218,6 +218,17 @@ func (a *Application) runGUI() int {
 	a.fyneApp.Run()
 
 	return 0
+}
+
+func (a *Application) setupFyneTray() {
+	a.trayManager = ui.NewTrayManager(
+		a.fyneApp,
+		a.cfg,
+		func() { a.mainWindow.Show() },
+		func() { a.quit() },
+	)
+	a.trayManager.SetWindow(a.mainWindow.Window())
+	a.trayManager.Setup()
 }
 
 func (a *Application) quit() {

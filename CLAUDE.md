@@ -2,57 +2,86 @@
 
 ## Project Overview
 
-TTAI (TastyTrade AI) is an AI-assisted trading analysis system built as a Python MCP server. It provides tools for portfolio analysis, options strategies, and market research via the Model Context Protocol.
+TTAI (TastyTrade AI) is an AI-assisted trading analysis system built as a Go MCP server with a system tray GUI. It provides tools for portfolio analysis, options strategies, and market research via the Model Context Protocol.
 
 ## Architecture
 
 The system consists of:
-- **Python MCP Server** (`src-python/`): Core backend providing MCP tools, TastyTrade API integration, and analysis capabilities
-- **Tauri Desktop App** (future): Svelte frontend for settings/configuration, with Python server as sidecar
-- **Headless Mode**: Python server runs standalone for use with Claude Desktop or other MCP clients
+- **Go MCP Server** (`src-go/`): Core application providing MCP tools, TastyTrade API integration, system tray GUI, and analysis capabilities
+- **Cloudflare Worker** (`cert-api/`): SSL certificate distribution for HTTPS support
+- **Headless Mode**: Server runs standalone for use with Claude Desktop or other MCP clients
+- **GUI Mode**: System tray app with settings window (default)
 
-## Python Development
+## Go Development
 
-### Package Manager: uv
-
-This project uses **uv** for Python dependency management. Always use uv commands:
+### Building
 
 ```bash
-cd src-python
+cd src-go
 
-# Sync dependencies (install/update all deps from pyproject.toml)
-uv sync
+# Development build (current platform)
+make build
 
-# Run Python commands through uv
-uv run python -m src.server.main --headless --port 5180
+# Run in GUI mode
+make run
 
-# Run tests
-uv run pytest tests/ -v
+# Run in headless mode
+make run-headless
 
-# Run linters
-uv run ruff check src/
-uv run mypy src/
+# Run in stdio mode (for MCP subprocess integration)
+make run-stdio
+
+# Run with SSL
+make run-ssl
+```
+
+### Build Targets
+
+```bash
+# Build for all platforms
+make build-all
+
+# macOS builds
+make build-darwin-arm64    # Apple Silicon binary
+make build-darwin-amd64    # Intel Mac binary
+make bundle-darwin-arm64   # Apple Silicon .app bundle
+make bundle-darwin-amd64   # Intel Mac .app bundle
+make zip-darwin-arm64      # Zipped .app for distribution
+make zip-darwin-amd64      # Zipped .app for distribution
+
+# Windows build
+make build-windows         # Creates TTAI-windows.exe
+
+# Linux build
+make build-linux           # Creates TTAI-linux binary
+
+# Maintenance
+make clean                 # Remove build artifacts
+make test                  # Run tests
+make fmt                   # Format code
+make lint                  # Run linters
+make deps                  # Tidy and download dependencies
 ```
 
 ### Running the Server
 
 ```bash
-cd src-python
+cd src-go
 
-# GUI mode (default) - launches desktop app
-uv run python -m src.server.main
+# GUI mode (default) - launches system tray app
+./ttai
 
 # Headless HTTP mode - for Claude Desktop
-uv run python -m src.server.main --headless --port 5180
+./ttai --headless --port 5180
 
-# HTTPS mode - fetches SSL cert from api.tt-ai.dev, runs on local.tt-ai.dev:5181
-TTAI_SSL_DOMAIN=tt-ai.dev uv run python -m src.server.main --headless
+# HTTPS mode - fetches SSL cert from api.tt-ai.dev
+TTAI_SSL_DOMAIN=tt-ai.dev ./ttai --headless
 
 # Stdio mode - for subprocess/sidecar integration
-uv run python -m src.server.main --headless --transport stdio
+./ttai --headless --transport stdio
 
 # With debug logging
-TTAI_LOG_LEVEL=DEBUG uv run python -m src.server.main --headless --port 5180
+TTAI_LOG_LEVEL=DEBUG ./ttai --headless --port 5180
 ```
 
 ### Environment Variables
@@ -75,22 +104,37 @@ When `TTAI_SSL_DOMAIN` is set:
 ### Project Structure
 
 ```
-src-python/
-├── pyproject.toml           # Project config and dependencies
-├── src/
-│   ├── server/              # MCP server implementation
-│   │   ├── main.py          # Entry point
-│   │   ├── config.py        # Configuration
-│   │   ├── ssl.py           # SSL certificate management
-│   │   └── tools.py         # MCP tool registration
-│   ├── auth/                # Authentication
-│   │   └── credentials.py   # Encrypted credential storage
-│   ├── services/            # Business logic
-│   │   ├── tastytrade.py    # TastyTrade API wrapper
-│   │   ├── cache.py         # In-memory caching
-│   │   └── database.py      # SQLite database
-│   └── utils/               # Shared utilities
-└── tests/                   # Test suite
+src-go/
+├── main.go                  # Entry point
+├── Makefile                 # Build commands
+├── go.mod                   # Go module definition
+├── internal/
+│   ├── app/                 # Application lifecycle
+│   │   └── app.go           # Main app struct, GUI/headless modes
+│   ├── config/              # Configuration management
+│   ├── mcp/                 # MCP server implementation
+│   │   ├── server.go        # MCP protocol handling
+│   │   ├── tools.go         # Tool definitions
+│   │   └── rest.go          # REST API endpoints
+│   ├── tastytrade/          # TastyTrade API client
+│   │   ├── client.go        # API wrapper
+│   │   └── types.go         # Data types
+│   ├── credentials/         # Secure credential storage (keyring)
+│   ├── cache/               # In-memory caching
+│   ├── ssl/                 # SSL certificate management
+│   └── state/               # Application state
+├── ui/
+│   ├── window.go            # Main settings window
+│   ├── tray.go              # System tray setup
+│   ├── tray_darwin.go       # macOS dock hiding (cgo)
+│   ├── tray_windows.go      # Windows taskbar handling
+│   ├── tray_linux.go        # Linux taskbar handling
+│   ├── pages/               # UI pages (settings, about, connection)
+│   └── dialogs/             # UI dialogs (login)
+└── resources/
+    ├── resources.go         # Embedded resources
+    ├── icon.png             # App icon
+    └── tray_template.png    # System tray icon
 
 cert-api/                    # Cloudflare Worker for certificate distribution
 ├── src/
@@ -102,97 +146,73 @@ cert-api/                    # Cloudflare Worker for certificate distribution
 
 ### Key Dependencies
 
-- `mcp>=1.0.0` - Model Context Protocol SDK
-- `tastytrade>=8.0` - Official TastyTrade Python SDK
-- `cryptography>=41.0.0` - Fernet encryption for credentials
-- `starlette>=0.27.0` + `uvicorn>=0.23.0` - HTTP transport
-- `httpx>=0.25.0` - Async HTTP client for certificate fetching
+- `fyne.io/fyne/v2` - Cross-platform GUI framework
+- `fyne.io/systray` - System tray support
+- `github.com/mark3labs/mcp-go` - MCP protocol SDK
+- `github.com/zalando/go-keyring` - Secure credential storage
 
-## Architecture Documentation
+## TastyTrade API Reference
 
-Detailed design docs are in `docs/architecture/`:
+The Python implementation (`src-python/`) serves as a reference for the TastyTrade API integration. Use it to understand:
 
-| Document | Description |
-|----------|-------------|
-| [01-mcp-server-design.md](docs/architecture/01-mcp-server-design.md) | MCP protocol, transports, tool/resource registration |
-| [02-workflow-orchestration.md](docs/architecture/02-workflow-orchestration.md) | Python asyncio task orchestration |
-| [03-python-server.md](docs/architecture/03-python-server.md) | Server architecture, running modes, project structure |
-| [04-ai-agent-system.md](docs/architecture/04-ai-agent-system.md) | AI agent implementations |
-| [05-data-layer.md](docs/architecture/05-data-layer.md) | SQLite database and credential storage |
-| [06-background-tasks.md](docs/architecture/06-background-tasks.md) | Background monitors and notifications |
-| [07-knowledge-base.md](docs/architecture/07-knowledge-base.md) | Knowledge base and vector search |
-| [08-build-distribution.md](docs/architecture/08-build-distribution.md) | PyInstaller packaging, distribution |
-| [09-integration-patterns.md](docs/architecture/09-integration-patterns.md) | Tauri ↔ Python and HTTP/SSE communication |
-| [10-local-development.md](docs/architecture/10-local-development.md) | Development setup and workflows |
-| [11-frontend.md](docs/architecture/11-frontend.md) | Svelte/Tailwind/DaisyUI frontend |
+- **Authentication flow**: OAuth token exchange, session management
+- **API endpoints**: Quote data, positions, option chains, order placement
+- **Data structures**: How TastyTrade returns market data, account info
+
+Key Python files for reference:
+- `src-python/src/services/tastytrade.py` - TastyTrade API wrapper
+- `src-python/src/auth/credentials.py` - Credential encryption patterns
+
+The official TastyTrade Python SDK (`tastytrade>=8.0`) is also useful for understanding the API.
 
 ## Current Implementation Status
 
 ### Implemented
 - MCP server with stdio/HTTP transports
-- Desktop GUI app (PySide6)
+- System tray GUI app (Fyne)
+- Platform-specific dock/taskbar hiding (macOS, Windows, Linux)
 - HTTPS support with certificate fetching from Cloudflare Worker
 - Cloudflare Worker for SSL certificate distribution (cert-api/)
 - Configuration management
-- Database and cache services
-- Credential manager with Fernet encryption
-- TastyTrade service with session management
+- Credential storage via system keyring
+- In-memory cache service
+- TastyTrade client with session management
 - MCP tools: `ping`, `login`, `logout`, `get_auth_status`, `get_quote`
 
 ### Not Yet Implemented
 - Full TastyTrade API coverage (positions, chains, orders)
 - AI agents (chart analyst, options analyst)
 - Background tasks and monitors
-- Knowledge base
-
-## Testing
-
-```bash
-cd src-python
-
-# Run all tests
-uv run pytest tests/ -v
-
-# Run with coverage
-uv run pytest tests/ -v --cov=src --cov-report=html
-
-# Run specific test file
-uv run pytest tests/test_services/test_tastytrade.py -v
-```
 
 ## Code Style
 
-- Python 3.11+
-- Type hints required
-- Line length: 100 characters
-- Linting: ruff, mypy
-- Formatting: Follows ruff defaults
+- Go 1.21+
+- Use `go fmt` for formatting
+- Use `go vet` and `golangci-lint` for linting
+- Follow standard Go conventions
 
 ```bash
-cd src-python
-uv run ruff check src/
-uv run ruff format src/
-uv run mypy src/
+cd src-go
+make fmt    # Format code
+make lint   # Run linters
+make test   # Run tests
 ```
-
-## Maintaining This Document
-
-**Keep this CLAUDE.md updated** as more parts of the architecture are implemented. When adding new features:
-- Update the "Current Implementation Status" section
-- Add new environment variables or configuration options
-- Document new MCP tools and their usage
-- Note any changes to project structure
-
-This ensures Claude Code has accurate context for future development sessions.
 
 ## Data Storage
 
 All user data is stored locally in `~/.ttai/`:
-- `.key` - Fernet encryption key (auto-generated)
-- `.credentials` - Encrypted TastyTrade credentials
-- `ttai.db` - SQLite database
 - `logs/` - Application logs
 - `ssl/` - Cached SSL certificates (when HTTPS enabled)
   - `cert.pem` - Certificate chain
   - `key.pem` - Private key
   - `meta.json` - Certificate metadata (expiry, domain)
+
+Credentials are stored in the system keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+
+## Maintaining This Document
+
+**Keep this CLAUDE.md updated** as features are implemented:
+- Update "Current Implementation Status" section
+- Add new environment variables or configuration options
+- Document new MCP tools and their usage
+- Note any changes to project structure
