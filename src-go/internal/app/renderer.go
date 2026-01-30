@@ -9,9 +9,17 @@ import (
 // ConfigureRenderer sets up the appropriate renderer for the platform.
 // On Windows, it detects if OpenGL is likely unavailable (VM, RDP) and
 // falls back to software rendering.
-func ConfigureRenderer() {
-	// Skip if user explicitly set a renderer
+func ConfigureRenderer(forceSoftware bool) {
+	// User explicitly requested software rendering
+	if forceSoftware {
+		log.Println("Software rendering enabled via flag")
+		os.Setenv("FYNE_RENDERER", "software")
+		return
+	}
+
+	// Skip if user explicitly set a renderer via environment
 	if os.Getenv("FYNE_RENDERER") != "" {
+		log.Printf("Using renderer from environment: %s", os.Getenv("FYNE_RENDERER"))
 		return
 	}
 
@@ -19,6 +27,10 @@ func ConfigureRenderer() {
 	if runtime.GOOS != "windows" {
 		return
 	}
+
+	// Log detection info for debugging
+	log.Printf("Renderer detection: SESSIONNAME=%q, COMPUTERNAME=%q",
+		os.Getenv("SESSIONNAME"), os.Getenv("COMPUTERNAME"))
 
 	// Check if we're in an environment where OpenGL typically doesn't work
 	if isRemoteDesktop() || isVirtualMachine() {
