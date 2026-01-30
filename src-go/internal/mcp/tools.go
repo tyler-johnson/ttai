@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/ttai/ttai/internal/tastytrade"
 )
@@ -179,7 +180,7 @@ func (h *ToolHandler) CallTool(name string, arguments map[string]interface{}) To
 
 		quote, err := h.client.GetQuote(symbol)
 		if err != nil {
-			return ErrorResult("Failed to get quote for " + symbol)
+			return ErrorResult(fmt.Sprintf("Failed to get quote for %s: %v", symbol, err))
 		}
 
 		return JSONResult(quote)

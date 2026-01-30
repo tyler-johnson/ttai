@@ -1,7 +1,90 @@
 // Package tastytrade provides a client for the TastyTrade API.
 package tastytrade
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
+
+// FlexFloat is a float64 that can unmarshal from both JSON strings and numbers.
+type FlexFloat float64
+
+func (f *FlexFloat) UnmarshalJSON(data []byte) error {
+	// Try as number first
+	var num float64
+	if err := json.Unmarshal(data, &num); err == nil {
+		*f = FlexFloat(num)
+		return nil
+	}
+
+	// Try as string
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+
+	if str == "" {
+		*f = 0
+		return nil
+	}
+
+	num, err := strconv.ParseFloat(str, 64)
+	if err != nil {
+		return err
+	}
+	*f = FlexFloat(num)
+	return nil
+}
+
+// FlexFloatPtr is a *float64 that can unmarshal from JSON strings, numbers, or null.
+type FlexFloatPtr struct {
+	Value *float64
+}
+
+func (f *FlexFloatPtr) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		f.Value = nil
+		return nil
+	}
+
+	// Try as number first
+	var num float64
+	if err := json.Unmarshal(data, &num); err == nil {
+		f.Value = &num
+		return nil
+	}
+
+	// Try as string
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+
+	if str == "" {
+		f.Value = nil
+		return nil
+	}
+
+	num, err := strconv.ParseFloat(str, 64)
+	if err != nil {
+		return err
+	}
+	f.Value = &num
+	return nil
+}
+
+func (f FlexFloatPtr) MarshalJSON() ([]byte, error) {
+	if f.Value == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(*f.Value)
+}
+
+// Float64 returns the float64 pointer value.
+func (f FlexFloatPtr) Float64() *float64 {
+	return f.Value
+}
 
 // QuoteData represents quote data with market data and metrics.
 type QuoteData struct {
@@ -49,28 +132,26 @@ type OAuthTokenResponse struct {
 
 // MarketDataResponse represents the market data API response.
 type MarketDataResponse struct {
-	Data struct {
-		Items []MarketDataItem `json:"items"`
-	} `json:"data"`
+	Data MarketDataItem `json:"data"`
 }
 
 // MarketDataItem represents a single market data item.
 type MarketDataItem struct {
-	Symbol       string  `json:"symbol"`
-	Bid          float64 `json:"bid"`
-	Ask          float64 `json:"ask"`
-	Last         float64 `json:"last"`
-	Mid          float64 `json:"mid"`
-	Mark         float64 `json:"mark"`
-	Volume       float64 `json:"volume"`
-	DayOpen      float64 `json:"day-open"`
-	DayHighPrice float64 `json:"day-high-price"`
-	DayLowPrice  float64 `json:"day-low-price"`
-	Close        float64 `json:"close"`
-	PrevClose    float64 `json:"prev-close"`
-	YearHighPrice float64 `json:"year-high-price"`
-	YearLowPrice  float64 `json:"year-low-price"`
-	UpdatedAt    time.Time `json:"updated-at"`
+	Symbol        string    `json:"symbol"`
+	Bid           FlexFloat `json:"bid"`
+	Ask           FlexFloat `json:"ask"`
+	Last          FlexFloat `json:"last"`
+	Mid           FlexFloat `json:"mid"`
+	Mark          FlexFloat `json:"mark"`
+	Volume        FlexFloat `json:"volume"`
+	DayOpen       FlexFloat `json:"day-open"`
+	DayHighPrice  FlexFloat `json:"day-high-price"`
+	DayLowPrice   FlexFloat `json:"day-low-price"`
+	Close         FlexFloat `json:"close"`
+	PrevClose     FlexFloat `json:"prev-close"`
+	YearHighPrice FlexFloat `json:"year-high-price"`
+	YearLowPrice  FlexFloat `json:"year-low-price"`
+	UpdatedAt     time.Time `json:"updated-at"`
 }
 
 // MarketMetricsResponse represents the market metrics API response.
@@ -82,20 +163,20 @@ type MarketMetricsResponse struct {
 
 // MarketMetricsItem represents market metrics for a symbol.
 type MarketMetricsItem struct {
-	Symbol                       string   `json:"symbol"`
-	ImpliedVolatilityIndex       *float64 `json:"implied-volatility-index"`
-	ImpliedVolatilityIndexRank   *float64 `json:"implied-volatility-index-rank"`
-	ImpliedVolatilityPercentile  *float64 `json:"implied-volatility-percentile"`
-	ImpliedVolatility30Day       *float64 `json:"implied-volatility-30-day"`
-	HistoricalVolatility30Day    *float64 `json:"historical-volatility-30-day"`
-	IVHV30DayDifference          *float64 `json:"iv-hv-30-day-difference"`
-	Beta                         *float64 `json:"beta"`
-	MarketCap                    *float64 `json:"market-cap"`
-	PriceEarningsRatio           *float64 `json:"price-earnings-ratio"`
-	EarningsPerShare             *float64 `json:"earnings-per-share"`
-	DividendYield                *float64 `json:"dividend-yield"`
-	LiquidityRating              *int     `json:"liquidity-rating"`
-	Earnings                     *EarningsInfo `json:"earnings"`
+	Symbol                      string       `json:"symbol"`
+	ImpliedVolatilityIndex      FlexFloatPtr `json:"implied-volatility-index"`
+	ImpliedVolatilityIndexRank  FlexFloatPtr `json:"implied-volatility-index-rank"`
+	ImpliedVolatilityPercentile FlexFloatPtr `json:"implied-volatility-percentile"`
+	ImpliedVolatility30Day      FlexFloatPtr `json:"implied-volatility-30-day"`
+	HistoricalVolatility30Day   FlexFloatPtr `json:"historical-volatility-30-day"`
+	IVHV30DayDifference         FlexFloatPtr `json:"iv-hv-30-day-difference"`
+	Beta                        FlexFloatPtr `json:"beta"`
+	MarketCap                   FlexFloatPtr `json:"market-cap"`
+	PriceEarningsRatio          FlexFloatPtr `json:"price-earnings-ratio"`
+	EarningsPerShare            FlexFloatPtr `json:"earnings-per-share"`
+	DividendYield               FlexFloatPtr `json:"dividend-yield"`
+	LiquidityRating             *int         `json:"liquidity-rating"`
+	Earnings                    *EarningsInfo `json:"earnings"`
 }
 
 // EarningsInfo represents earnings information.

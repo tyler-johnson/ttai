@@ -127,7 +127,7 @@ func (c *Client) Logout(clearCredentials bool) error {
 		// Attempt to destroy the session on the server
 		req, err := http.NewRequest("DELETE", baseURL+"/sessions", nil)
 		if err == nil {
-			req.Header.Set("Authorization", c.sessionToken)
+			req.Header.Set("Authorization", "Bearer "+c.sessionToken)
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
 				log.Printf("Warning: failed to destroy session: %v", err)
@@ -195,19 +195,33 @@ func (c *Client) GetQuote(symbol string) (*QuoteData, error) {
 
 	// Populate from market data
 	if marketData != nil {
-		quote.Bid = &marketData.Bid
-		quote.Ask = &marketData.Ask
-		quote.Last = &marketData.Last
-		quote.Mid = &marketData.Mid
-		quote.Mark = &marketData.Mark
-		quote.Volume = &marketData.Volume
-		quote.Open = &marketData.DayOpen
-		quote.High = &marketData.DayHighPrice
-		quote.Low = &marketData.DayLowPrice
-		quote.Close = &marketData.Close
-		quote.PrevClose = &marketData.PrevClose
-		quote.YearHigh = &marketData.YearHighPrice
-		quote.YearLow = &marketData.YearLowPrice
+		bid := float64(marketData.Bid)
+		ask := float64(marketData.Ask)
+		last := float64(marketData.Last)
+		mid := float64(marketData.Mid)
+		mark := float64(marketData.Mark)
+		volume := float64(marketData.Volume)
+		open := float64(marketData.DayOpen)
+		high := float64(marketData.DayHighPrice)
+		low := float64(marketData.DayLowPrice)
+		close := float64(marketData.Close)
+		prevClose := float64(marketData.PrevClose)
+		yearHigh := float64(marketData.YearHighPrice)
+		yearLow := float64(marketData.YearLowPrice)
+
+		quote.Bid = &bid
+		quote.Ask = &ask
+		quote.Last = &last
+		quote.Mid = &mid
+		quote.Mark = &mark
+		quote.Volume = &volume
+		quote.Open = &open
+		quote.High = &high
+		quote.Low = &low
+		quote.Close = &close
+		quote.PrevClose = &prevClose
+		quote.YearHigh = &yearHigh
+		quote.YearLow = &yearLow
 
 		if !marketData.UpdatedAt.IsZero() {
 			updatedAt := marketData.UpdatedAt.Format(time.RFC3339)
@@ -217,16 +231,16 @@ func (c *Client) GetQuote(symbol string) (*QuoteData, error) {
 
 	// Populate from market metrics
 	if metrics != nil {
-		quote.IVRank = metrics.ImpliedVolatilityIndexRank
-		quote.IVPercentile = metrics.ImpliedVolatilityPercentile
-		quote.IV30Day = metrics.ImpliedVolatility30Day
-		quote.HV30Day = metrics.HistoricalVolatility30Day
-		quote.IVHVDiff = metrics.IVHV30DayDifference
-		quote.Beta = metrics.Beta
-		quote.MarketCap = metrics.MarketCap
-		quote.PERatio = metrics.PriceEarningsRatio
-		quote.EarningsPerShare = metrics.EarningsPerShare
-		quote.DividendYield = metrics.DividendYield
+		quote.IVRank = metrics.ImpliedVolatilityIndexRank.Float64()
+		quote.IVPercentile = metrics.ImpliedVolatilityPercentile.Float64()
+		quote.IV30Day = metrics.ImpliedVolatility30Day.Float64()
+		quote.HV30Day = metrics.HistoricalVolatility30Day.Float64()
+		quote.IVHVDiff = metrics.IVHV30DayDifference.Float64()
+		quote.Beta = metrics.Beta.Float64()
+		quote.MarketCap = metrics.MarketCap.Float64()
+		quote.PERatio = metrics.PriceEarningsRatio.Float64()
+		quote.EarningsPerShare = metrics.EarningsPerShare.Float64()
+		quote.DividendYield = metrics.DividendYield.Float64()
 		quote.LiquidityRating = metrics.LiquidityRating
 
 		if metrics.Earnings != nil && metrics.Earnings.ExpectedReportDate != "" {
@@ -245,13 +259,13 @@ func (c *Client) fetchMarketData(symbol string) (*MarketDataItem, error) {
 	token := c.sessionToken
 	c.mu.RUnlock()
 
-	url := fmt.Sprintf("%s/market-data/equities/%s/quotes", baseURL, symbol)
+	url := fmt.Sprintf("%s/market-data/Equity/%s", baseURL, symbol)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -269,11 +283,7 @@ func (c *Client) fetchMarketData(symbol string) (*MarketDataItem, error) {
 		return nil, err
 	}
 
-	if len(dataResp.Data.Items) == 0 {
-		return nil, fmt.Errorf("no market data found for %s", symbol)
-	}
-
-	return &dataResp.Data.Items[0], nil
+	return &dataResp.Data, nil
 }
 
 func (c *Client) fetchMarketMetrics(symbol string) (*MarketMetricsItem, error) {
@@ -287,7 +297,7 @@ func (c *Client) fetchMarketMetrics(symbol string) (*MarketMetricsItem, error) {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
