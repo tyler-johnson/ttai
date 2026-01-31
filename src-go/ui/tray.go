@@ -49,27 +49,14 @@ func (t *TrayManager) Setup() {
 	}
 	desk.SetSystemTrayIcon(trayIcon)
 
-	// Build menu - Note: Fyne automatically adds "Quit" on macOS,
-	// so we only add our own quit item on other platforms
+	// Build menu - Fyne automatically adds a "Quit" item on all platforms
 	copyURLItem := fyne.NewMenuItem("Copy MCP Server URL", t.onCopyURL)
 	showItem := fyne.NewMenuItem("Open Settings", t.onShow)
 
-	if runtime.GOOS == "darwin" {
-		// On macOS, Fyne adds its own Quit item automatically
-		t.menu = fyne.NewMenu("TTAI",
-			copyURLItem,
-			showItem,
-		)
-	} else {
-		// On other platforms, add our own quit item
-		quitItem := fyne.NewMenuItem("Quit TTAI", t.onQuit)
-		t.menu = fyne.NewMenu("TTAI",
-			copyURLItem,
-			showItem,
-			fyne.NewMenuItemSeparator(),
-			quitItem,
-		)
-	}
+	t.menu = fyne.NewMenu("TTAI",
+		copyURLItem,
+		showItem,
+	)
 
 	desk.SetSystemTrayMenu(t.menu)
 	log.Println("System tray configured")
