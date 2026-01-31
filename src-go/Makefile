@@ -39,10 +39,10 @@ build-all: build-darwin build-windows build-linux
 
 build-darwin: build-darwin-arm64 build-darwin-amd64
 
-build-darwin-arm64:
+build-darwin-arm64: web
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64 .
 
-build-darwin-amd64:
+build-darwin-amd64: web
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(APP_NAME)-darwin-amd64 .
 
 # Create macOS .app bundle
@@ -95,13 +95,13 @@ define create-app-bundle
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app"
 endef
 
-# Zip macOS app bundles for distribution
+# Zip macOS app bundles for distribution (use ditto to preserve bundle structure)
 zip-darwin-arm64: bundle-darwin-arm64
-	cd $(DIST_DIR) && zip -r $(DISPLAY_NAME)-darwin-arm64.zip $(DISPLAY_NAME)-darwin-arm64.app
+	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-arm64.app $(DISPLAY_NAME)-darwin-arm64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.zip"
 
 zip-darwin-amd64: bundle-darwin-amd64
-	cd $(DIST_DIR) && zip -r $(DISPLAY_NAME)-darwin-amd64.zip $(DISPLAY_NAME)-darwin-amd64.app
+	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-amd64.app $(DISPLAY_NAME)-darwin-amd64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.zip"
 
 zip-darwin: zip-darwin-arm64 zip-darwin-amd64
@@ -113,14 +113,14 @@ zip-darwin: zip-darwin-arm64 zip-darwin-amd64
 # Windows build flags: -H windowsgui hides the console window
 WINDOWS_BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION) -H windowsgui"
 
-build-windows:
+build-windows: web
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build $(WINDOWS_BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
 
 # =============================================================================
 # Linux Build
 # =============================================================================
 
-build-linux:
+build-linux: web
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-linux .
 
 # =============================================================================
