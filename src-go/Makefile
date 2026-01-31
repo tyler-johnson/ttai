@@ -61,66 +61,68 @@ bundle-darwin-amd64: build-darwin-amd64
 bundle-darwin: bundle-darwin-arm64 bundle-darwin-amd64
 
 # Function to create macOS app bundle
+# Note: App bundle is always named TTAI.app, arch suffix only on the zip
 define create-app-bundle
 	@echo "Creating $(DISPLAY_NAME).app bundle for $(1)..."
-	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/MacOS
-	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Resources
-	@cp $(DIST_DIR)/$(APP_NAME)-$(1) $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/MacOS/$(APP_NAME)
-	@cp $(RESOURCES_DIR)/icon.png $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Resources/icon.png
-	@echo '<?xml version="1.0" encoding="UTF-8"?>' > $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '<plist version="1.0">' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '<dict>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleExecutable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>$(APP_NAME)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleIconFile</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>icon.png</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleIdentifier</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>$(BUNDLE_ID)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleName</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>$(DISPLAY_NAME)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundlePackageType</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>APPL</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleShortVersionString</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>$(VERSION)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>CFBundleVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>$(VERSION)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>LSMinimumSystemVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>11.0</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>LSUIElement</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <true/>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>NSHighResolutionCapable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <true/>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <key>LSArchitecturePriority</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <array>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '        <string>$(2)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    </array>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '</dict>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '</plist>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app"
+	@rm -rf $(DIST_DIR)/$(DISPLAY_NAME).app
+	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/MacOS
+	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Resources
+	@cp $(DIST_DIR)/$(APP_NAME)-$(1) $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/MacOS/$(APP_NAME)
+	@cp $(RESOURCES_DIR)/icon.png $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Resources/icon.png
+	@echo '<?xml version="1.0" encoding="UTF-8"?>' > $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '<plist version="1.0">' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '<dict>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleExecutable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>$(APP_NAME)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleIconFile</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>icon.png</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleIdentifier</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>$(BUNDLE_ID)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleName</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>$(DISPLAY_NAME)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundlePackageType</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>APPL</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleShortVersionString</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>$(VERSION)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>CFBundleVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>$(VERSION)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>LSMinimumSystemVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>11.0</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>LSUIElement</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <true/>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>NSHighResolutionCapable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <true/>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <key>LSArchitecturePriority</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <array>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '        <string>$(2)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    </array>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '</dict>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '</plist>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME).app"
 endef
 
 # Sign macOS app bundles (only runs if CODESIGN_IDENTITY is set)
 sign-darwin-arm64: bundle-darwin-arm64
 ifneq ($(CODESIGN_IDENTITY),)
-	@echo "Signing $(DISPLAY_NAME)-darwin-arm64.app with identity: $(CODESIGN_IDENTITY)"
+	@echo "Signing $(DISPLAY_NAME).app with identity: $(CODESIGN_IDENTITY)"
 	codesign --force --options runtime --entitlements $(ENTITLEMENTS) \
 		--sign "$(CODESIGN_IDENTITY)" \
 		--timestamp \
-		$(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.app
-	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.app"
+		$(DIST_DIR)/$(DISPLAY_NAME).app
+	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME).app"
 else
 	@echo "Skipping code signing (CODESIGN_IDENTITY not set)"
 endif
 
 sign-darwin-amd64: bundle-darwin-amd64
 ifneq ($(CODESIGN_IDENTITY),)
-	@echo "Signing $(DISPLAY_NAME)-darwin-amd64.app with identity: $(CODESIGN_IDENTITY)"
+	@echo "Signing $(DISPLAY_NAME).app with identity: $(CODESIGN_IDENTITY)"
 	codesign --force --options runtime --entitlements $(ENTITLEMENTS) \
 		--sign "$(CODESIGN_IDENTITY)" \
 		--timestamp \
-		$(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.app
-	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.app"
+		$(DIST_DIR)/$(DISPLAY_NAME).app
+	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME).app"
 else
 	@echo "Skipping code signing (CODESIGN_IDENTITY not set)"
 endif
@@ -129,12 +131,13 @@ sign-darwin: sign-darwin-arm64 sign-darwin-amd64
 
 # Zip macOS app bundles for distribution (use ditto to preserve bundle structure)
 # Signing is performed before zipping if CODESIGN_IDENTITY is set
+# Note: Zip file has arch suffix for differentiation, but app inside is just TTAI.app
 zip-darwin-arm64: sign-darwin-arm64
-	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-arm64.app $(DISPLAY_NAME)-darwin-arm64.zip
+	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME).app $(DISPLAY_NAME)-darwin-arm64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.zip"
 
 zip-darwin-amd64: sign-darwin-amd64
-	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-amd64.app $(DISPLAY_NAME)-darwin-amd64.zip
+	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME).app $(DISPLAY_NAME)-darwin-amd64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.zip"
 
 zip-darwin: zip-darwin-arm64 zip-darwin-amd64

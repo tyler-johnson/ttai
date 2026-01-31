@@ -115,8 +115,8 @@ jobs:
           cd dist
           ditto -x -k TTAI-darwin-${{ matrix.arch }}.zip .
           rm TTAI-darwin-${{ matrix.arch }}.zip
-          xcrun stapler staple TTAI-darwin-${{ matrix.arch }}.app
-          ditto -c -k --keepParent TTAI-darwin-${{ matrix.arch }}.app TTAI-darwin-${{ matrix.arch }}.zip
+          xcrun stapler staple TTAI.app
+          ditto -c -k --keepParent TTAI.app TTAI-darwin-${{ matrix.arch }}.zip
 
       - name: Clean up keychain and credentials
         if: always() && github.event_name == 'release'

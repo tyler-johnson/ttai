@@ -56,14 +56,47 @@ func isLaunchAtStartupMacOS() bool {
 	return err == nil
 }
 
+// getAppBundlePath returns the .app bundle path if running from one, or empty string otherwise.
+// For example, if running from /Applications/TTAI.app/Contents/MacOS/ttai,
+// this returns /Applications/TTAI.app
+func getAppBundlePath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+
+	// Check if we're inside a .app bundle: .../Something.app/Contents/MacOS/binary
+	dir := filepath.Dir(exePath) // MacOS
+	if filepath.Base(dir) != "MacOS" {
+		return ""
+	}
+	dir = filepath.Dir(dir) // Contents
+	if filepath.Base(dir) != "Contents" {
+		return ""
+	}
+	appDir := filepath.Dir(dir) // Something.app
+	if filepath.Ext(appDir) != ".app" {
+		return ""
+	}
+
+	return appDir
+}
+
 func setLaunchAtStartupMacOS(enabled bool) bool {
 	plistPath := getMacOSLaunchAgentPath()
 
 	if enabled {
-		exePath, err := os.Executable()
-		if err != nil {
-			log.Printf("Failed to get executable path: %v", err)
-			return false
+		// Prefer .app bundle path if available, otherwise use executable path
+		launchPath := getAppBundlePath()
+		useOpen := launchPath != ""
+
+		if launchPath == "" {
+			var err error
+			launchPath, err = os.Executable()
+			if err != nil {
+				log.Printf("Failed to get executable path: %v", err)
+				return false
+			}
 		}
 
 		// Ensure directory exists
@@ -73,7 +106,10 @@ func setLaunchAtStartupMacOS(enabled bool) bool {
 			return false
 		}
 
-		plistContent := `<?xml version="1.0" encoding="UTF-8"?>
+		var plistContent string
+		if useOpen {
+			// Use 'open' command to launch .app bundle - this shows proper app name in Login Items
+			plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -81,18 +117,37 @@ func setLaunchAtStartupMacOS(enabled bool) bool {
     <string>dev.tt-ai.ttai</string>
     <key>ProgramArguments</key>
     <array>
-        <string>` + exePath + `</string>
+        <string>/usr/bin/open</string>
+        <string>` + launchPath + `</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
 </dict>
 </plist>
 `
+		} else {
+			// Direct binary execution
+			plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.tt-ai.ttai</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>` + launchPath + `</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+`
+		}
 		if err := os.WriteFile(plistPath, []byte(plistContent), 0644); err != nil {
 			log.Printf("Failed to write launch agent: %v", err)
 			return false
 		}
-		log.Printf("Created launch agent at %s", plistPath)
+		log.Printf("Created launch agent at %s (launching: %s)", plistPath, launchPath)
 		return true
 	} else {
 		if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
