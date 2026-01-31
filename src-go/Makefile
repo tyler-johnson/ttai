@@ -68,7 +68,7 @@ define create-app-bundle
 	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/MacOS
 	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Resources
 	@cp $(DIST_DIR)/$(APP_NAME)-$(1) $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/MacOS/$(APP_NAME)
-	@cp $(RESOURCES_DIR)/icon.png $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Resources/icon.png
+	@cp $(RESOURCES_DIR)/icon.icns $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Resources/icon.icns
 	@echo '<?xml version="1.0" encoding="UTF-8"?>' > $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '<plist version="1.0">' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
@@ -76,7 +76,7 @@ define create-app-bundle
 	@echo '    <key>CFBundleExecutable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '    <string>$(APP_NAME)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '    <key>CFBundleIconFile</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
-	@echo '    <string>icon.png</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
+	@echo '    <string>icon.icns</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '    <key>CFBundleIdentifier</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '    <string>$(BUNDLE_ID)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
 	@echo '    <key>CFBundleName</key>' >> $(DIST_DIR)/$(DISPLAY_NAME).app/Contents/Info.plist
