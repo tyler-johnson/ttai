@@ -12,6 +12,11 @@ BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
 # Directories
 DIST_DIR := dist
 RESOURCES_DIR := resources
+
+# Code signing identity (set via environment or CLI)
+# Example: CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+CODESIGN_IDENTITY ?=
+ENTITLEMENTS := $(RESOURCES_DIR)/entitlements.plist
 WEB_DIR := ../src-web
 WEBUI_DIST := internal/webui/dist
 
@@ -95,12 +100,40 @@ define create-app-bundle
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app"
 endef
 
+# Sign macOS app bundles (only runs if CODESIGN_IDENTITY is set)
+sign-darwin-arm64: bundle-darwin-arm64
+ifneq ($(CODESIGN_IDENTITY),)
+	@echo "Signing $(DISPLAY_NAME)-darwin-arm64.app with identity: $(CODESIGN_IDENTITY)"
+	codesign --force --options runtime --entitlements $(ENTITLEMENTS) \
+		--sign "$(CODESIGN_IDENTITY)" \
+		--timestamp \
+		$(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.app
+	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.app"
+else
+	@echo "Skipping code signing (CODESIGN_IDENTITY not set)"
+endif
+
+sign-darwin-amd64: bundle-darwin-amd64
+ifneq ($(CODESIGN_IDENTITY),)
+	@echo "Signing $(DISPLAY_NAME)-darwin-amd64.app with identity: $(CODESIGN_IDENTITY)"
+	codesign --force --options runtime --entitlements $(ENTITLEMENTS) \
+		--sign "$(CODESIGN_IDENTITY)" \
+		--timestamp \
+		$(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.app
+	@echo "Signed $(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.app"
+else
+	@echo "Skipping code signing (CODESIGN_IDENTITY not set)"
+endif
+
+sign-darwin: sign-darwin-arm64 sign-darwin-amd64
+
 # Zip macOS app bundles for distribution (use ditto to preserve bundle structure)
-zip-darwin-arm64: bundle-darwin-arm64
+# Signing is performed before zipping if CODESIGN_IDENTITY is set
+zip-darwin-arm64: sign-darwin-arm64
 	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-arm64.app $(DISPLAY_NAME)-darwin-arm64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-arm64.zip"
 
-zip-darwin-amd64: bundle-darwin-amd64
+zip-darwin-amd64: sign-darwin-amd64
 	cd $(DIST_DIR) && ditto -c -k --keepParent $(DISPLAY_NAME)-darwin-amd64.app $(DISPLAY_NAME)-darwin-amd64.zip
 	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-darwin-amd64.zip"
 
@@ -174,6 +207,7 @@ deps:
 .PHONY: all build build-all web \
 	build-darwin build-darwin-arm64 build-darwin-amd64 \
 	bundle-darwin bundle-darwin-arm64 bundle-darwin-amd64 \
+	sign-darwin sign-darwin-arm64 sign-darwin-amd64 \
 	zip-darwin zip-darwin-arm64 zip-darwin-amd64 \
 	build-windows build-linux \
 	run run-headless run-stdio run-ssl \
