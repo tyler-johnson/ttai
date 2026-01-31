@@ -6,39 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-
-	"fyne.io/fyne/v2"
 )
-
-// Preferences manages application preferences.
-type Preferences struct {
-	app fyne.App
-}
-
-// NewPreferences creates a new preferences manager.
-func NewPreferences(app fyne.App) *Preferences {
-	return &Preferences{app: app}
-}
-
-// ShowWindowOnLaunch returns whether to show the window on launch.
-func (p *Preferences) ShowWindowOnLaunch() bool {
-	return p.app.Preferences().BoolWithFallback("show_window_on_launch", true)
-}
-
-// SetShowWindowOnLaunch sets whether to show the window on launch.
-func (p *Preferences) SetShowWindowOnLaunch(show bool) {
-	p.app.Preferences().SetBool("show_window_on_launch", show)
-}
-
-// IsFirstRun returns whether this is the first run of the application.
-func (p *Preferences) IsFirstRun() bool {
-	return p.app.Preferences().BoolWithFallback("is_first_run", true)
-}
-
-// SetFirstRunComplete marks the first run as complete.
-func (p *Preferences) SetFirstRunComplete() {
-	p.app.Preferences().SetBool("is_first_run", false)
-}
 
 // --- Launch at Startup ---
 

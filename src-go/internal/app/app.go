@@ -21,7 +21,7 @@ import (
 	"github.com/ttai/ttai/internal/ssl"
 	"github.com/ttai/ttai/internal/state"
 	"github.com/ttai/ttai/internal/tastytrade"
-	"github.com/ttai/ttai/resources"
+	"github.com/ttai/ttai/internal/webui"
 	"github.com/ttai/ttai/ui"
 )
 
@@ -29,10 +29,9 @@ import (
 type Application struct {
 	cfg         *config.Config
 	fyneApp     fyne.App
-	mainWindow  *ui.MainWindow
 	trayManager *ui.TrayManager
 	appState    *state.AppState
-	prefs       *state.Preferences
+	prefs       *webui.PreferencesManager
 	client      *tastytrade.Client
 	mcpServer   *mcp.Server
 	httpServer  *http.Server
@@ -65,6 +64,7 @@ func (a *Application) Run(headless bool) int {
 	cacheService := cache.New()
 	a.client = tastytrade.NewClient(credManager, cacheService)
 	a.appState = state.New()
+	a.prefs = webui.NewPreferencesManager(a.cfg.DataDir)
 
 	// Create MCP server
 	toolHandler := mcp.NewToolHandler(a.client)
@@ -119,12 +119,16 @@ func (a *Application) runHTTPServer() int {
 	mux.Handle("/mcp", a.mcpServer.HTTPHandler())
 	mux.Handle("/mcp/", a.mcpServer.HTTPHandler())
 
-	// REST API endpoints
+	// REST API endpoints (legacy)
 	restHandler := mcp.NewRESTHandlerV2(a.client)
 	mux.HandleFunc("/api/health", restHandler.HealthHandler)
 	mux.HandleFunc("/api/auth-status", restHandler.AuthStatusHandler)
 	mux.HandleFunc("/api/login", restHandler.LoginHandler)
 	mux.HandleFunc("/api/logout", restHandler.LogoutHandler)
+
+	// Web UI endpoints
+	webHandler := webui.NewHandler(a.cfg, a.client, a.prefs)
+	webHandler.RegisterRoutes(mux)
 
 	// Determine host and port
 	host := a.cfg.Host
@@ -176,45 +180,30 @@ func (a *Application) runHTTPServer() int {
 }
 
 func (a *Application) runGUI() int {
-	// Create Fyne app
+	// Create Fyne app (only used for system tray)
 	a.fyneApp = fyneapp.NewWithID("dev.tt-ai.ttai")
 
 	// Hide from dock on macOS (tray-only app)
-	// Call once now and again after app starts (Fyne may reset the policy)
 	ui.HideFromDock()
 	a.fyneApp.Lifecycle().SetOnStarted(func() {
 		ui.HideFromDock()
 	})
 
-	// Load icon
-	icon := loadIcon()
-
-	// Set app icon
-	if icon != nil {
-		a.fyneApp.SetIcon(icon)
-	}
-
-	// Create preferences manager
-	a.prefs = state.NewPreferences(a.fyneApp)
-
-	// Create main window
-	a.mainWindow = ui.NewMainWindow(a.fyneApp, a.cfg, a.client, a.appState, a.prefs, icon)
-
-	// Create system tray using Fyne
+	// Create system tray
 	a.setupFyneTray()
 
 	// Start HTTP server in background
 	go a.runHTTPServer()
 
-	// Show window if configured or first run
+	// Open settings in browser if configured or first run
 	if a.prefs.ShowWindowOnLaunch() || a.prefs.IsFirstRun() {
-		a.mainWindow.Show()
+		webui.OpenSettingsInBrowser(a.cfg)
 		if a.prefs.IsFirstRun() {
 			a.prefs.SetFirstRunComplete()
 		}
 	}
 
-	// Run the Fyne event loop
+	// Run the Fyne event loop (keeps tray alive)
 	a.fyneApp.Run()
 
 	return 0
@@ -225,12 +214,11 @@ func (a *Application) setupFyneTray() {
 		a.fyneApp,
 		a.cfg,
 		func() {
-			log.Println("Tray: Show Settings clicked")
-			a.mainWindow.Show()
+			log.Println("Tray: Open Settings clicked")
+			webui.OpenSettingsInBrowser(a.cfg)
 		},
 		func() { a.quit() },
 	)
-	a.trayManager.SetWindow(a.mainWindow.Window())
 	a.trayManager.Setup()
 }
 
@@ -256,8 +244,4 @@ func (a *Application) shutdown() {
 	}
 
 	log.Println("Application shutdown complete")
-}
-
-func loadIcon() fyne.Resource {
-	return resources.Icon()
 }

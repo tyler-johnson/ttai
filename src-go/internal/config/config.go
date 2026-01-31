@@ -9,13 +9,13 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	Transport         string // "http" or "stdio"
-	Host              string // Server host (default: "localhost")
-	Port              int    // HTTP port (default: 5180)
-	LogLevel          string // Log level (default: "info")
-	DataDir           string // Data directory (default: ~/.ttai)
-	SSLDomain         string // Base domain for SSL (default: "tt-ai.dev")
-	SSLPort           int    // HTTPS port (default: 5181)
+	Transport          string // "http" or "stdio"
+	Host               string // Server host (default: "localhost")
+	Port               int    // HTTP port (default: 5180)
+	LogLevel           string // Log level (default: "info")
+	DataDir            string // Data directory (default: ~/.ttai)
+	SSLDomain          string // Base domain for SSL (default: "tt-ai.dev")
+	SSLPort            int    // HTTPS port (default: 5181)
 	SSLCertAPIOverride string // Override cert API URL (for local dev)
 }
 

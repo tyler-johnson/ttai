@@ -1,2 +1,3 @@
 ttai
-dist/
+/dist/
+!internal/webui/dist/

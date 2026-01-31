@@ -12,12 +12,22 @@ BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION)"
 # Directories
 DIST_DIR := dist
 RESOURCES_DIR := resources
+WEB_DIR := ../src-web
+WEBUI_DIST := internal/webui/dist
 
 # Default target
 all: build
 
+# Build web assets (SvelteKit)
+web:
+	@echo "Building web UI..."
+	cd $(WEB_DIR) && npm install && npm run build
+	rm -rf $(WEBUI_DIST)
+	cp -r $(WEB_DIR)/build $(WEBUI_DIST)
+	@echo "Web UI built successfully"
+
 # Development build (current platform)
-build:
+build: web
 	go build $(BUILD_FLAGS) -o $(APP_NAME) .
 
 # Build for all platforms
@@ -141,6 +151,7 @@ run-ssl:
 clean:
 	rm -f $(APP_NAME)
 	rm -rf $(DIST_DIR)
+	rm -rf $(WEBUI_DIST)
 
 # Run tests
 test:
@@ -160,7 +171,7 @@ deps:
 	go mod tidy
 	go mod download
 
-.PHONY: all build build-all \
+.PHONY: all build build-all web \
 	build-darwin build-darwin-arm64 build-darwin-amd64 \
 	bundle-darwin bundle-darwin-arm64 bundle-darwin-amd64 \
 	zip-darwin zip-darwin-arm64 zip-darwin-amd64 \

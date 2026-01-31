@@ -108,19 +108,19 @@ type QuoteData struct {
 	YearLow  *float64 `json:"year_low,omitempty"`
 
 	// Market metrics
-	IVRank            *float64 `json:"iv_rank,omitempty"`
-	IVPercentile      *float64 `json:"iv_percentile,omitempty"`
-	IV30Day           *float64 `json:"iv_30_day,omitempty"`
-	HV30Day           *float64 `json:"hv_30_day,omitempty"`
-	IVHVDiff          *float64 `json:"iv_hv_diff,omitempty"`
-	Beta              *float64 `json:"beta,omitempty"`
-	MarketCap         *float64 `json:"market_cap,omitempty"`
-	PERatio           *float64 `json:"pe_ratio,omitempty"`
-	EarningsPerShare  *float64 `json:"earnings_per_share,omitempty"`
-	DividendYield     *float64 `json:"dividend_yield,omitempty"`
-	LiquidityRating   *int     `json:"liquidity_rating,omitempty"`
-	EarningsDate      *string  `json:"earnings_date,omitempty"`
-	UpdatedAt         *string  `json:"updated_at,omitempty"`
+	IVRank           *float64 `json:"iv_rank,omitempty"`
+	IVPercentile     *float64 `json:"iv_percentile,omitempty"`
+	IV30Day          *float64 `json:"iv_30_day,omitempty"`
+	HV30Day          *float64 `json:"hv_30_day,omitempty"`
+	IVHVDiff         *float64 `json:"iv_hv_diff,omitempty"`
+	Beta             *float64 `json:"beta,omitempty"`
+	MarketCap        *float64 `json:"market_cap,omitempty"`
+	PERatio          *float64 `json:"pe_ratio,omitempty"`
+	EarningsPerShare *float64 `json:"earnings_per_share,omitempty"`
+	DividendYield    *float64 `json:"dividend_yield,omitempty"`
+	LiquidityRating  *int     `json:"liquidity_rating,omitempty"`
+	EarningsDate     *string  `json:"earnings_date,omitempty"`
+	UpdatedAt        *string  `json:"updated_at,omitempty"`
 }
 
 // OAuthTokenResponse represents the OAuth token response.
@@ -163,19 +163,19 @@ type MarketMetricsResponse struct {
 
 // MarketMetricsItem represents market metrics for a symbol.
 type MarketMetricsItem struct {
-	Symbol                      string       `json:"symbol"`
-	ImpliedVolatilityIndex      FlexFloatPtr `json:"implied-volatility-index"`
-	ImpliedVolatilityIndexRank  FlexFloatPtr `json:"implied-volatility-index-rank"`
-	ImpliedVolatilityPercentile FlexFloatPtr `json:"implied-volatility-percentile"`
-	ImpliedVolatility30Day      FlexFloatPtr `json:"implied-volatility-30-day"`
-	HistoricalVolatility30Day   FlexFloatPtr `json:"historical-volatility-30-day"`
-	IVHV30DayDifference         FlexFloatPtr `json:"iv-hv-30-day-difference"`
-	Beta                        FlexFloatPtr `json:"beta"`
-	MarketCap                   FlexFloatPtr `json:"market-cap"`
-	PriceEarningsRatio          FlexFloatPtr `json:"price-earnings-ratio"`
-	EarningsPerShare            FlexFloatPtr `json:"earnings-per-share"`
-	DividendYield               FlexFloatPtr `json:"dividend-yield"`
-	LiquidityRating             *int         `json:"liquidity-rating"`
+	Symbol                      string        `json:"symbol"`
+	ImpliedVolatilityIndex      FlexFloatPtr  `json:"implied-volatility-index"`
+	ImpliedVolatilityIndexRank  FlexFloatPtr  `json:"implied-volatility-index-rank"`
+	ImpliedVolatilityPercentile FlexFloatPtr  `json:"implied-volatility-percentile"`
+	ImpliedVolatility30Day      FlexFloatPtr  `json:"implied-volatility-30-day"`
+	HistoricalVolatility30Day   FlexFloatPtr  `json:"historical-volatility-30-day"`
+	IVHV30DayDifference         FlexFloatPtr  `json:"iv-hv-30-day-difference"`
+	Beta                        FlexFloatPtr  `json:"beta"`
+	MarketCap                   FlexFloatPtr  `json:"market-cap"`
+	PriceEarningsRatio          FlexFloatPtr  `json:"price-earnings-ratio"`
+	EarningsPerShare            FlexFloatPtr  `json:"earnings-per-share"`
+	DividendYield               FlexFloatPtr  `json:"dividend-yield"`
+	LiquidityRating             *int          `json:"liquidity-rating"`
 	Earnings                    *EarningsInfo `json:"earnings"`
 }
 
