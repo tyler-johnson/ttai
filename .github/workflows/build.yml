@@ -58,6 +58,7 @@ jobs:
           CGO_ENABLED: 1
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           make VERSION=$VERSION zip-darwin-${{ matrix.arch }}

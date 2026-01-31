@@ -81,7 +81,7 @@ define create-app-bundle
 	@echo '    <key>CFBundleVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
 	@echo '    <string>$(VERSION)</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
 	@echo '    <key>LSMinimumSystemVersion</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
-	@echo '    <string>10.15</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
+	@echo '    <string>11.0</string>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
 	@echo '    <key>LSUIElement</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
 	@echo '    <true/>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
 	@echo '    <key>NSHighResolutionCapable</key>' >> $(DIST_DIR)/$(DISPLAY_NAME)-$(1).app/Contents/Info.plist
