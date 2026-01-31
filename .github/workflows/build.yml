@@ -92,7 +92,8 @@ jobs:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
           MACOSX_DEPLOYMENT_TARGET: '11.0'
-          CODESIGN_IDENTITY: "${{ env.HAVE_SIGNING_SECRETS == 'true' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}"
+          # Only set CODESIGN_IDENTITY on release builds (when certificate is imported)
+          CODESIGN_IDENTITY: "${{ github.event_name == 'release' && env.HAVE_SIGNING_SECRETS == 'true' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}"
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           make VERSION="$VERSION" zip-darwin-${{ matrix.arch }}
