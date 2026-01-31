@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ttai/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/tastytrade"
 )
 
 // Tool represents an MCP tool definition.

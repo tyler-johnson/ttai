@@ -1,14 +1,14 @@
-module github.com/ttai/ttai
+module github.com/tyler-johnson/ttai
 
 go 1.22
 
 require (
 	fyne.io/fyne/v2 v2.7.2
-	fyne.io/systray v1.12.0
 	github.com/zalando/go-keyring v0.2.5
 )
 
 require (
+	fyne.io/systray v1.12.0 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/alessio/shellescape v1.4.1 // indirect
 	github.com/danieljoos/wincred v1.2.0 // indirect

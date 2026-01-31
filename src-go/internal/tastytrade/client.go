@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ttai/ttai/internal/cache"
-	"github.com/ttai/ttai/internal/credentials"
+	"github.com/tyler-johnson/ttai/internal/cache"
+	"github.com/tyler-johnson/ttai/internal/credentials"
 )
 
 const (

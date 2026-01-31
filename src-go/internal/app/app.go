@@ -14,15 +14,15 @@ import (
 	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 
-	"github.com/ttai/ttai/internal/cache"
-	"github.com/ttai/ttai/internal/config"
-	"github.com/ttai/ttai/internal/credentials"
-	"github.com/ttai/ttai/internal/mcp"
-	"github.com/ttai/ttai/internal/ssl"
-	"github.com/ttai/ttai/internal/state"
-	"github.com/ttai/ttai/internal/tastytrade"
-	"github.com/ttai/ttai/internal/webui"
-	"github.com/ttai/ttai/ui"
+	"github.com/tyler-johnson/ttai/internal/cache"
+	"github.com/tyler-johnson/ttai/internal/config"
+	"github.com/tyler-johnson/ttai/internal/credentials"
+	"github.com/tyler-johnson/ttai/internal/mcp"
+	"github.com/tyler-johnson/ttai/internal/ssl"
+	"github.com/tyler-johnson/ttai/internal/state"
+	"github.com/tyler-johnson/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/webui"
+	"github.com/tyler-johnson/ttai/ui"
 )
 
 // Application represents the TTAI application.

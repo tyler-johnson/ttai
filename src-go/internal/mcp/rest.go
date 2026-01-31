@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/ttai/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/tastytrade"
 )
 
 // RESTHandlerV2 provides REST API endpoints for the GUI using the concrete TastyTrade client.

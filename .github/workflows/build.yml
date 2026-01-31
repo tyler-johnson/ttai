@@ -8,6 +8,7 @@ on:
     paths:
       - 'src-go/go.sum'
       - 'src-go/go.mod'
+  workflow_dispatch:
 
 jobs:
   build-macos:

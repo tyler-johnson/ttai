@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ttai/ttai/internal/config"
-	"github.com/ttai/ttai/internal/state"
-	"github.com/ttai/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/config"
+	"github.com/tyler-johnson/ttai/internal/state"
+	"github.com/tyler-johnson/ttai/internal/tastytrade"
 )
 
 //go:embed dist/*

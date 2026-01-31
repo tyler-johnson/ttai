@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ttai/ttai/internal/app"
-	"github.com/ttai/ttai/internal/config"
+	"github.com/tyler-johnson/ttai/internal/app"
+	"github.com/tyler-johnson/ttai/internal/config"
 )
 
 func main() {

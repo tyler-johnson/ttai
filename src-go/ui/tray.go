@@ -9,9 +9,9 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 
-	"github.com/ttai/ttai/internal/config"
-	"github.com/ttai/ttai/internal/webui"
-	"github.com/ttai/ttai/resources"
+	"github.com/tyler-johnson/ttai/internal/config"
+	"github.com/tyler-johnson/ttai/internal/webui"
+	"github.com/tyler-johnson/ttai/resources"
 )
 
 // TrayManager manages the system tray icon and menu using Fyne.
