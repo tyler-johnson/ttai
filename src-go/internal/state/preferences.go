@@ -52,6 +52,18 @@ func getMacOSLaunchAgentPath() string {
 }
 
 func isLaunchAtStartupMacOS() bool {
+	// Use SMAppService on macOS 13+
+	if isSMAppServiceAvailable() {
+		status := getSMAppServiceStatus()
+		// Consider enabled if status is enabled or requires approval (user hasn't approved yet but we registered)
+		return status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval
+	}
+
+	// Fall back to LaunchAgent for macOS 11-12
+	return isLaunchAtStartupMacOSLegacy()
+}
+
+func isLaunchAtStartupMacOSLegacy() bool {
 	_, err := os.Stat(getMacOSLaunchAgentPath())
 	return err == nil
 }
@@ -83,6 +95,19 @@ func getAppBundlePath() string {
 }
 
 func setLaunchAtStartupMacOS(enabled bool) bool {
+	// Use SMAppService on macOS 13+
+	if isSMAppServiceAvailable() {
+		if enabled {
+			return registerWithSMAppService()
+		}
+		return unregisterWithSMAppService()
+	}
+
+	// Fall back to LaunchAgent for macOS 11-12
+	return setLaunchAtStartupMacOSLegacy(enabled)
+}
+
+func setLaunchAtStartupMacOSLegacy(enabled bool) bool {
 	plistPath := getMacOSLaunchAgentPath()
 
 	if enabled {
