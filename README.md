@@ -108,4 +108,4 @@ macOS releases are signed and notarized - no Gatekeeper warnings.
 
 ## License
 
-Private - All rights reserved
+[MIT License](LICENSE)
