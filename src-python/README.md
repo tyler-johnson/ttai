@@ -1,6 +1,6 @@
-# TTAI
+# TTAI Python (Reference Implementation)
 
-TastyTrade AI - Desktop app and MCP server for TastyTrade trading assistant.
+Python implementation of the TTAI MCP server. This serves as a reference for the TastyTrade API integration - the primary implementation is the [Go version](../src-go/).
 
 ## Installation
 

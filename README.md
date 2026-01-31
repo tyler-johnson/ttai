@@ -7,6 +7,7 @@ An AI-assisted trading analysis system that provides tools for portfolio analysi
 | Directory | Description |
 |-----------|-------------|
 | [`src-go/`](src-go/) | Go MCP server with system tray GUI (primary implementation) |
+| [`src-web/`](src-web/) | SvelteKit web UI embedded in the Go app |
 | [`src-python/`](src-python/) | Python MCP server (reference implementation) |
 | [`cert-api/`](cert-api/) | Cloudflare Worker for SSL certificate distribution |
 
@@ -88,9 +89,22 @@ The project includes a Cloudflare Worker (`cert-api/`) that provides SSL certifi
 
 ## Requirements
 
-- Go 1.22+ (for Go implementation)
-- Python 3.11+ (for Python implementation)
+- Go 1.22+ (for building from source)
+- Node.js 20+ (for building the web UI)
 - TastyTrade account with OAuth credentials
+
+## Releases
+
+Pre-built binaries are available on the [Releases](../../releases) page:
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `TTAI-darwin-arm64.zip` |
+| macOS (Intel) | `TTAI-darwin-amd64.zip` |
+| Windows | `TTAI-windows.exe` |
+| Linux | `TTAI-linux` |
+
+macOS releases are signed and notarized - no Gatekeeper warnings.
 
 ## License
 

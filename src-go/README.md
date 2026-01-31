@@ -7,6 +7,7 @@ A Go implementation of the TTAI (TastyTrade AI) application with a compact ~18MB
 ### Prerequisites
 
 - Go 1.22 or later
+- Node.js 20+ (for building the web UI)
 - For GUI mode: system libraries for Fyne (see [Fyne prerequisites](https://developer.fyne.io/started/))
 
 ### Quick Build
@@ -155,6 +156,17 @@ src-go/
     ├── icon.png                 # App icon
     └── resources.go             # Embedded resources
 ```
+
+## Code Signing (macOS)
+
+macOS builds can be signed and notarized for distribution:
+
+```bash
+# Sign locally (requires Developer ID certificate)
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" make zip-darwin-arm64
+```
+
+GitHub Actions automatically signs and notarizes releases when secrets are configured. See [docs/CODE_SIGNING_SETUP.md](../docs/CODE_SIGNING_SETUP.md) for setup instructions.
 
 ## Binary Size
 
