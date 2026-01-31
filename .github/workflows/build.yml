@@ -19,6 +19,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: Build macOS (${{ matrix.arch }})
+    env:
+      HAVE_SIGNING_SECRETS: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+      HAVE_NOTARIZATION_SECRETS: ${{ secrets.APPLE_API_KEY_BASE64 != '' }}
 
     steps:
       - name: Checkout code
@@ -41,11 +44,11 @@ jobs:
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Import Code Signing Certificate
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: env.HAVE_SIGNING_SECRETS == 'true'
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -64,13 +67,13 @@ jobs:
           rm certificate.p12
 
       - name: Setup notarization credentials
-        if: ${{ secrets.APPLE_API_KEY_BASE64 != '' }}
+        if: env.HAVE_NOTARIZATION_SECRETS == 'true'
         env:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
         run: |
           mkdir -p ~/private_keys
-          echo "$APPLE_API_KEY_BASE64" | base64 --decode > ~/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > ~/private_keys/"AuthKey_${APPLE_API_KEY_ID}.p8"
 
       - name: Build, sign, and bundle
         working-directory: src-go
@@ -79,13 +82,13 @@ jobs:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
           MACOSX_DEPLOYMENT_TARGET: '11.0'
-          CODESIGN_IDENTITY: "${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}"
+          CODESIGN_IDENTITY: "${{ env.HAVE_SIGNING_SECRETS == 'true' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}"
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          make VERSION=$VERSION zip-darwin-${{ matrix.arch }}
+          make VERSION="$VERSION" zip-darwin-${{ matrix.arch }}
 
       - name: Notarize app
-        if: ${{ secrets.APPLE_API_KEY_BASE64 != '' }}
+        if: env.HAVE_NOTARIZATION_SECRETS == 'true'
         working-directory: src-go
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -93,7 +96,7 @@ jobs:
         run: |
           # Submit for notarization
           xcrun notarytool submit dist/TTAI-darwin-${{ matrix.arch }}.zip \
-            --key ~/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8 \
+            --key ~/private_keys/"AuthKey_${APPLE_API_KEY_ID}.p8" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
             --wait
@@ -144,7 +147,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Install make
@@ -157,7 +160,7 @@ jobs:
           CGO_ENABLED: 1
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          make VERSION=$VERSION build-windows
+          make VERSION="$VERSION" build-windows
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -203,7 +206,7 @@ jobs:
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
       - name: Build
@@ -212,7 +215,7 @@ jobs:
           CGO_ENABLED: 1
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          make VERSION=$VERSION build-linux
+          make VERSION="$VERSION" build-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
