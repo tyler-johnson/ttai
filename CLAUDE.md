@@ -26,12 +26,12 @@ ttai/
                 │
         ┌───────┴─────────────────┐
         │                         │
-    ┌───▼────────┐          ┌────▼──────────┐
-    │ Stdio Mode │          │ HTTP/HTTPS    │
-    │ (Subprocess)│         │ Mode          │
-    └───┬────────┘          └────┬──────────┘
-        │                        │
-    ┌───▼────────────────────────▼───────────┐
+    ┌───▼─────────┐          ┌────▼──────────┐
+    │ Stdio Mode  │          │ HTTP/HTTPS    │
+    │ (Subprocess)│          │ Mode          │
+    └───┬─────────┘          └────┬──────────┘
+        │                         │
+    ┌───▼─────────────────────────▼──────────┐
     │  Go MCP Server (src-go)                │
     │  - MCP Protocol Handler                │
     │  - System Tray GUI (Fyne)              │
@@ -39,7 +39,7 @@ ttai/
     │  - TastyTrade API Client               │
     └────┬───────────────┬───────────────────┘
          │               │
-    ┌────▼────┐    ┌────▼──────────┐
+    ┌────▼─────┐   ┌─────▼─────────┐
     │TastyTrade│   │ cert-api      │
     │ API      │   │ (Cloudflare)  │
     └──────────┘   └───────────────┘
@@ -120,31 +120,32 @@ TTAI_LOG_LEVEL=DEBUG ./ttai --headless --port 5180
 
 ### CLI Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `--headless` | Run without GUI |
-| `--transport` | Transport mode: `stdio` or `http` |
-| `--host` | HTTP server host |
-| `--port` | HTTP server port |
-| `--log-level` | Logging level |
-| `--data-dir` | Data directory |
-| `--ssl-domain` | SSL domain for HTTPS |
-| `--ssl-port` | HTTPS port |
+| Argument       | Description                       |
+| -------------- | --------------------------------- |
+| `--headless`   | Run without GUI                   |
+| `--transport`  | Transport mode: `stdio` or `http` |
+| `--host`       | HTTP server host                  |
+| `--port`       | HTTP server port                  |
+| `--log-level`  | Logging level                     |
+| `--data-dir`   | Data directory                    |
+| `--ssl-domain` | SSL domain for HTTPS              |
+| `--ssl-port`   | HTTPS port                        |
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TTAI_TRANSPORT` | Transport: `stdio` or `http` | `http` |
-| `TTAI_HOST` | HTTP host | `localhost` |
-| `TTAI_PORT` | HTTP port | `5180` |
-| `TTAI_LOG_LEVEL` | Log level | `INFO` |
-| `TTAI_DATA_DIR` | Data directory | `~/.ttai` |
-| `TTAI_SSL_DOMAIN` | Base domain for SSL | `tt-ai.dev` |
-| `TTAI_SSL_PORT` | HTTPS port | `5181` |
-| `TTAI_SSL_CERT_API` | Override cert API URL | (computed) |
+| Variable            | Description                  | Default     |
+| ------------------- | ---------------------------- | ----------- |
+| `TTAI_TRANSPORT`    | Transport: `stdio` or `http` | `http`      |
+| `TTAI_HOST`         | HTTP host                    | `localhost` |
+| `TTAI_PORT`         | HTTP port                    | `5180`      |
+| `TTAI_LOG_LEVEL`    | Log level                    | `INFO`      |
+| `TTAI_DATA_DIR`     | Data directory               | `~/.ttai`   |
+| `TTAI_SSL_DOMAIN`   | Base domain for SSL          | `tt-ai.dev` |
+| `TTAI_SSL_PORT`     | HTTPS port                   | `5181`      |
+| `TTAI_SSL_CERT_API` | Override cert API URL        | (computed)  |
 
 When `TTAI_SSL_DOMAIN` is set:
+
 - Cert API URL: `https://api.{TTAI_SSL_DOMAIN}/cert`
 - HTTPS server: `https://local.{TTAI_SSL_DOMAIN}:{TTAI_SSL_PORT}`
 - Falls back to HTTP if cert fetch fails
@@ -200,24 +201,24 @@ src-go/
 
 ### MCP Tools
 
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `ping` | Connectivity test | None |
-| `login` | TastyTrade OAuth authentication | `client_secret`, `refresh_token`, `remember_me` |
-| `logout` | Clear session and credentials | `clear_credentials` |
-| `get_auth_status` | Check authentication state | None |
-| `get_quote` | Fetch market quote data | `symbol` |
+| Tool              | Description                     | Parameters                                      |
+| ----------------- | ------------------------------- | ----------------------------------------------- |
+| `ping`            | Connectivity test               | None                                            |
+| `login`           | TastyTrade OAuth authentication | `client_secret`, `refresh_token`, `remember_me` |
+| `logout`          | Clear session and credentials   | `clear_credentials`                             |
+| `get_auth_status` | Check authentication state      | None                                            |
+| `get_quote`       | Fetch market quote data         | `symbol`                                        |
 
 ### REST API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/server-info` | GET | Server metadata (version, URLs, SSL) |
-| `/api/settings` | GET | User preferences |
-| `/api/settings` | PATCH | Update preferences |
-| `/api/tastytrade` | GET | TastyTrade auth status |
-| `/api/tastytrade` | POST | Login with OAuth |
-| `/api/tastytrade` | DELETE | Logout |
+| Endpoint           | Method | Description                          |
+| ------------------ | ------ | ------------------------------------ |
+| `/api/server-info` | GET    | Server metadata (version, URLs, SSL) |
+| `/api/settings`    | GET    | User preferences                     |
+| `/api/settings`    | PATCH  | Update preferences                   |
+| `/api/tastytrade`  | GET    | TastyTrade auth status               |
+| `/api/tastytrade`  | POST   | Login with OAuth                     |
+| `/api/tastytrade`  | DELETE | Logout                               |
 
 ### Key Dependencies
 
@@ -297,11 +298,11 @@ cert-api/
 
 ### Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/cert` | GET | Returns certificate bundle |
-| `/health` | GET | Health check |
-| `/renew` | POST | Manual certificate renewal |
+| Endpoint  | Method | Description                |
+| --------- | ------ | -------------------------- |
+| `/cert`   | GET    | Returns certificate bundle |
+| `/health` | GET    | Health check               |
+| `/renew`  | POST   | Manual certificate renewal |
 
 ### Deployment
 
@@ -353,11 +354,13 @@ src-python/
 ### build.yml
 
 Triggers:
+
 - Release creation
 - Push to main (src-go changes)
 - Manual dispatch
 
 Jobs:
+
 1. **macOS**: Builds arm64 + amd64, creates .app bundles
 2. **Code signing**: Signs and notarizes macOS releases
 3. **Windows**: Builds exe
@@ -365,14 +368,14 @@ Jobs:
 
 ### Required Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `APPLE_CERTIFICATE_BASE64` | Developer ID cert (base64) |
-| `APPLE_CERTIFICATE_PASSWORD` | Cert password |
-| `APPLE_API_KEY_BASE64` | Notarization API key |
-| `APPLE_API_KEY_ID` | API key identifier |
-| `APPLE_API_ISSUER_ID` | App Store Connect issuer |
-| `APPLE_TEAM_NAME` | Team identifier |
+| Secret                       | Description                |
+| ---------------------------- | -------------------------- |
+| `APPLE_CERTIFICATE_BASE64`   | Developer ID cert (base64) |
+| `APPLE_CERTIFICATE_PASSWORD` | Cert password              |
+| `APPLE_API_KEY_BASE64`       | Notarization API key       |
+| `APPLE_API_KEY_ID`           | API key identifier         |
+| `APPLE_API_ISSUER_ID`        | App Store Connect issuer   |
+| `APPLE_TEAM_NAME`            | Team identifier            |
 
 See `docs/CODE_SIGNING_SETUP.md` for setup instructions.
 
@@ -395,6 +398,7 @@ See `docs/CODE_SIGNING_SETUP.md` for setup instructions.
 ## Data Storage
 
 All user data stored in `~/.ttai/`:
+
 - `logs/ttai.log` - Application logs
 - `preferences.json` - User settings (ShowWindowOnLaunch, IsFirstRun)
 - `ssl/` - Cached SSL certificates
@@ -403,6 +407,7 @@ All user data stored in `~/.ttai/`:
   - `meta.json` - Certificate metadata
 
 Credentials stored in system keyring:
+
 - macOS: Keychain
 - Windows: Credential Manager
 - Linux: Secret Service (D-Bus)
@@ -412,11 +417,13 @@ Credentials stored in system keyring:
 ### SMAppService (Login Items)
 
 The app uses Apple's SMAppService API on macOS 13+ for "Launch at Login":
+
 - Shows "TTAI" in System Settings > General > Login Items
 - User approval via system prompt on first enable
 - No hidden LaunchAgent plist files
 
 **Requirements** (no entitlements needed for login items):
+
 - Code-signed app bundle
 - Valid bundle identifier (`dev.tt-ai.ttai`)
 - Running from .app bundle
@@ -426,6 +433,7 @@ The app uses Apple's SMAppService API on macOS 13+ for "Launch at Login":
 ### App Bundle
 
 Info.plist configuration:
+
 - `CFBundleIdentifier`: `dev.tt-ai.ttai`
 - `CFBundleName`: `TTAI`
 - `LSUIElement`: `true` (menu bar app)
@@ -434,6 +442,7 @@ Info.plist configuration:
 ## Current Implementation Status
 
 ### Implemented
+
 - MCP server with stdio/HTTP transports
 - System tray GUI app (Fyne)
 - Embedded web UI (SvelteKit)
@@ -449,6 +458,7 @@ Info.plist configuration:
 - GitHub Actions CI/CD with code signing
 
 ### Not Yet Implemented
+
 - Full TastyTrade API (positions, option chains, orders)
 - AI agents (chart analyst, options analyst)
 - Background tasks and monitors
@@ -457,6 +467,7 @@ Info.plist configuration:
 ## Code Style
 
 ### Go
+
 - Go 1.22+
 - `go fmt` for formatting
 - `go vet` and `golangci-lint` for linting
@@ -467,6 +478,7 @@ make fmt && make lint && make test
 ```
 
 ### TypeScript/Svelte
+
 - TypeScript 5.7+
 - Prettier for formatting
 - ESLint for linting
@@ -479,6 +491,7 @@ npm run lint && npm run check
 ## Maintaining This Document
 
 Keep CLAUDE.md updated as features are implemented:
+
 - Update "Current Implementation Status"
 - Add new MCP tools and REST endpoints
 - Document new environment variables
