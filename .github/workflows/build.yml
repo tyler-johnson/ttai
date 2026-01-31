@@ -91,11 +91,15 @@ jobs:
           go-version: '1.21'
           cache-dependency-path: src-go/go.sum
 
+      - name: Get Go cache path
+        id: go-cache
+        shell: bash
+        run: echo "path=$(go env GOCACHE)" >> $GITHUB_OUTPUT
+
       - name: Cache Go build artifacts
         uses: actions/cache@v4
         with:
-          path: |
-            ~\AppData\Local\go-build
+          path: ${{ steps.go-cache.outputs.path }}
           key: windows-go-build-${{ hashFiles('src-go/go.sum') }}
           restore-keys: |
             windows-go-build-
