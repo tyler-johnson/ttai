@@ -79,7 +79,7 @@ jobs:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
           MACOSX_DEPLOYMENT_TARGET: '11.0'
-          CODESIGN_IDENTITY: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}
+          CODESIGN_IDENTITY: "${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && format('Developer ID Application: {0}', secrets.APPLE_TEAM_NAME) || '' }}"
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           make VERSION=$VERSION zip-darwin-${{ matrix.arch }}
