@@ -196,9 +196,10 @@ jobs:
         shell: pwsh
         run: |
           $VERSION = "${{ steps.version.outputs.VERSION }}"
-          # go-msi make with templates directory (--out must be on same drive as source files)
+          # go-msi make - output MSI to tmp dir then copy
           New-Item -ItemType Directory -Force -Path "go-msi-tmp"
-          go-msi make --path wix.json --src templates --msi dist/TTAI-Setup.msi --version $VERSION --out go-msi-tmp
+          go-msi make --path wix.json --src templates --msi go-msi-tmp/TTAI-Setup.msi --version $VERSION --out go-msi-tmp
+          Copy-Item "go-msi-tmp/TTAI-Setup.msi" -Destination "dist/TTAI-Setup.msi"
 
       - name: Upload EXE artifact
         if: github.event_name == 'release'
