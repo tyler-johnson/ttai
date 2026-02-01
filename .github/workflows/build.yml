@@ -206,7 +206,7 @@ jobs:
           Set-Content -Path "$tempDir\wix.json" -Value $wixContent
           # Run go-msi from temp directory
           Push-Location $tempDir
-          go-msi generate-templates --src wix.json
+          go-msi generate-templates --version $VERSION --src wix.json
           go-msi make --msi TTAI-Setup.msi --version $VERSION --src wix.json
           Pop-Location
           # Copy MSI back
