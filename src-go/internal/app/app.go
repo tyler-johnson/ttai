@@ -21,20 +21,22 @@ import (
 	"github.com/tyler-johnson/ttai/internal/ssl"
 	"github.com/tyler-johnson/ttai/internal/state"
 	"github.com/tyler-johnson/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/update"
 	"github.com/tyler-johnson/ttai/internal/webui"
 	"github.com/tyler-johnson/ttai/ui"
 )
 
 // Application represents the TTAI application.
 type Application struct {
-	cfg         *config.Config
-	fyneApp     fyne.App
-	trayManager *ui.TrayManager
-	appState    *state.AppState
-	prefs       *webui.PreferencesManager
-	client      *tastytrade.Client
-	mcpServer   *mcp.Server
-	httpServer  *http.Server
+	cfg           *config.Config
+	fyneApp       fyne.App
+	trayManager   *ui.TrayManager
+	appState      *state.AppState
+	prefs         *webui.PreferencesManager
+	client        *tastytrade.Client
+	mcpServer     *mcp.Server
+	httpServer    *http.Server
+	updateManager *update.Manager
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -66,6 +68,11 @@ func (a *Application) Run(headless bool) int {
 	a.appState = state.New()
 	a.prefs = webui.NewPreferencesManager(a.cfg.DataDir)
 
+	// Create update manager
+	a.updateManager = update.NewManager(webui.Version, a.prefs.AutoUpdateEnabled)
+	updater := update.NewGitHubUpdater(webui.Version, a.cfg.DataDir)
+	a.updateManager.SetUpdater(updater)
+
 	// Create MCP server
 	toolHandler := mcp.NewToolHandler(a.client)
 	a.mcpServer = mcp.NewServer(toolHandler)
@@ -85,6 +92,11 @@ func (a *Application) Run(headless bool) int {
 
 func (a *Application) runHeadless() int {
 	log.Println("Running in headless mode")
+
+	// Start update checking in headless mode too
+	if a.updateManager != nil {
+		a.updateManager.Start()
+	}
 
 	// Setup signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -128,6 +140,7 @@ func (a *Application) runHTTPServer() int {
 
 	// Web UI endpoints
 	webHandler := webui.NewHandler(a.cfg, a.client, a.prefs)
+	webHandler.SetUpdateManager(a.updateManager)
 	webHandler.RegisterRoutes(mux)
 
 	// Determine host and port
@@ -192,6 +205,16 @@ func (a *Application) runGUI() int {
 	// Create system tray
 	a.setupFyneTray()
 
+	// Wire update manager to tray
+	if a.trayManager != nil && a.updateManager != nil {
+		a.trayManager.SetUpdateManager(a.updateManager)
+	}
+
+	// Start update checking
+	if a.updateManager != nil {
+		a.updateManager.Start()
+	}
+
 	// Start HTTP server in background
 	go a.runHTTPServer()
 
@@ -231,6 +254,11 @@ func (a *Application) quit() {
 
 func (a *Application) shutdown() {
 	a.cancel()
+
+	// Stop update manager
+	if a.updateManager != nil {
+		a.updateManager.Stop()
+	}
 
 	if a.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5)

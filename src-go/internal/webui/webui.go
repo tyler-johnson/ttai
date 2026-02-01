@@ -15,6 +15,7 @@ import (
 	"github.com/tyler-johnson/ttai/internal/config"
 	"github.com/tyler-johnson/ttai/internal/state"
 	"github.com/tyler-johnson/ttai/internal/tastytrade"
+	"github.com/tyler-johnson/ttai/internal/update"
 )
 
 //go:embed dist/*
@@ -25,9 +26,10 @@ const Version = "1.0.0"
 
 // Handler provides HTTP handlers for the web UI.
 type Handler struct {
-	cfg    *config.Config
-	client *tastytrade.Client
-	prefs  *PreferencesManager
+	cfg           *config.Config
+	client        *tastytrade.Client
+	prefs         *PreferencesManager
+	updateManager *update.Manager
 }
 
 // NewHandler creates a new web UI handler.
@@ -39,12 +41,18 @@ func NewHandler(cfg *config.Config, client *tastytrade.Client, prefs *Preference
 	}
 }
 
+// SetUpdateManager sets the update manager for the handler.
+func (h *Handler) SetUpdateManager(um *update.Manager) {
+	h.updateManager = um
+}
+
 // RegisterRoutes registers all web UI routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// API routes (must be registered before static file handler)
 	mux.HandleFunc("/api/server-info", h.ServerInfoHandler)
 	mux.HandleFunc("/api/settings", h.SettingsHandler)
 	mux.HandleFunc("/api/tastytrade", h.TastyTradeHandler)
+	mux.HandleFunc("/api/update", h.UpdateHandler)
 
 	// Static file handler for SPA
 	mux.HandleFunc("/", h.StaticHandler)
@@ -138,6 +146,7 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"launch_at_startup":       state.IsLaunchAtStartupEnabled(),
 		"open_settings_on_launch": prefs.ShowWindowOnLaunch,
+		"auto_update_enabled":     prefs.AutoUpdateEnabled,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -232,6 +241,106 @@ func (h *Handler) logoutTastyTrade(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"authenticated": false,
 	})
+}
+
+// UpdateHandler handles GET/POST /api/update.
+func (h *Handler) UpdateHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.getUpdateStatus(w, r)
+	case http.MethodPost:
+		h.updateAction(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) getUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if h.updateManager == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":          "idle",
+			"current_version": Version,
+		})
+		return
+	}
+
+	snap := h.updateManager.State().Snapshot()
+	response := map[string]interface{}{
+		"status":          snap.Status,
+		"current_version": h.updateManager.GetCurrentVersion(),
+	}
+
+	if snap.UpdateInfo != nil {
+		response["update_info"] = snap.UpdateInfo
+	}
+	if snap.Error != "" {
+		response["error"] = snap.Error
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handler) updateAction(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Action string `json:"action"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if h.updateManager == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Update manager not available",
+		})
+		return
+	}
+
+	switch body.Action {
+	case "check":
+		go h.updateManager.CheckForUpdates()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Update check started",
+		})
+
+	case "download":
+		go func() {
+			if err := h.updateManager.DownloadUpdate(); err != nil {
+				log.Printf("Download failed: %v", err)
+			}
+		}()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Download started",
+		})
+
+	case "apply":
+		if err := h.updateManager.ApplyUpdate(); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+		// If ApplyUpdate returns without error, the app should restart
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Update applied",
+		})
+
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Unknown action: " + body.Action,
+		})
+	}
 }
 
 // OpenBrowser opens the default browser to the given URL.

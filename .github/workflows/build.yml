@@ -178,13 +178,42 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           make VERSION="$VERSION" build-windows
 
-      - name: Upload artifact
+      - name: Install WiX Toolset
+        if: github.event_name == 'release'
+        run: |
+          choco install wixtoolset -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $GITHUB_PATH
+        shell: bash
+
+      - name: Install go-msi
+        if: github.event_name == 'release'
+        run: go install github.com/mh-cbon/go-msi@latest
+        shell: bash
+
+      - name: Build MSI
+        if: github.event_name == 'release'
+        working-directory: src-go
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          # Update version in wix.json
+          go-msi make --msi dist/TTAI-Setup.msi --version "$VERSION" --src wix.json
+
+      - name: Upload EXE artifact
         if: github.event_name == 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: TTAI-windows-amd64
+          name: TTAI-windows-exe
           path: src-go/dist/TTAI-windows.exe
           if-no-files-found: error
+
+      - name: Upload MSI artifact
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTAI-windows-msi
+          path: src-go/dist/TTAI-Setup.msi
+          if-no-files-found: warn
 
   build-linux:
     runs-on: ubuntu-22.04
@@ -238,13 +267,41 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           make VERSION="$VERSION" build-linux
 
-      - name: Upload artifact
+      - name: Install AppImageTool
+        if: github.event_name == 'release'
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/appimagetool
+
+      - name: Build AppImage
+        if: github.event_name == 'release'
+        working-directory: src-go
+        env:
+          ARCH: x86_64
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          # Update version in desktop file
+          sed -i "s/X-AppImage-Version=.*/X-AppImage-Version=$VERSION/" ttai.desktop
+          make VERSION="$VERSION" appimage
+
+      - name: Upload binary artifact
         if: github.event_name == 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: TTAI-linux-amd64
+          name: TTAI-linux-binary
           path: src-go/dist/TTAI-linux
           if-no-files-found: error
+
+      - name: Upload AppImage artifact
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTAI-linux-appimage
+          path: |
+            src-go/dist/TTAI-x86_64.AppImage
+            src-go/dist/TTAI-x86_64.AppImage.zsync
+          if-no-files-found: warn
 
   release:
     if: github.event_name == 'release'

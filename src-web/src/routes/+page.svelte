@@ -8,8 +8,13 @@
 		loginTastyTrade,
 		logoutTastyTrade,
 		copyToClipboard,
+		getUpdateStatus,
+		checkForUpdates,
+		downloadUpdate,
+		applyUpdate,
 		type ServerInfo,
-		type Settings
+		type Settings,
+		type UpdateStatus
 	} from '$lib/api';
 
 	// State
@@ -22,20 +27,37 @@
 	let clientSecret = $state('');
 	let refreshToken = $state('');
 	let copiedUrl = $state<string | null>(null);
+	let updateStatus = $state<UpdateStatus | null>(null);
+	let isUpdating = $state(false);
 
 	onMount(async () => {
 		try {
-			const [info, prefs, status] = await Promise.all([
+			const [info, prefs, status, update] = await Promise.all([
 				getServerInfo(),
 				getSettings(),
-				getTastyTradeStatus()
+				getTastyTradeStatus(),
+				getUpdateStatus()
 			]);
 			serverInfo = info;
 			settings = prefs;
 			isAuthenticated = status.authenticated;
+			updateStatus = update;
 		} catch (error) {
 			console.error('Failed to load initial data:', error);
 		}
+
+		// Poll update status every 5 seconds when checking/downloading
+		const pollInterval = setInterval(async () => {
+			if (updateStatus?.status === 'checking' || updateStatus?.status === 'downloading') {
+				try {
+					updateStatus = await getUpdateStatus();
+				} catch (error) {
+					console.error('Failed to poll update status:', error);
+				}
+			}
+		}, 5000);
+
+		return () => clearInterval(pollInterval);
 	});
 
 	async function handleCopy(url: string) {
@@ -95,6 +117,46 @@
 		}
 	}
 
+	async function handleCheckForUpdates() {
+		try {
+			await checkForUpdates();
+			updateStatus = await getUpdateStatus();
+		} catch (error) {
+			console.error('Failed to check for updates:', error);
+		}
+	}
+
+	async function handleDownloadUpdate() {
+		try {
+			isUpdating = true;
+			await downloadUpdate();
+			// Poll until download completes
+			const poll = async () => {
+				updateStatus = await getUpdateStatus();
+				if (updateStatus?.status === 'downloading') {
+					setTimeout(poll, 1000);
+				} else {
+					isUpdating = false;
+				}
+			};
+			poll();
+		} catch (error) {
+			console.error('Failed to download update:', error);
+			isUpdating = false;
+		}
+	}
+
+	async function handleApplyUpdate() {
+		try {
+			isUpdating = true;
+			await applyUpdate();
+			// App will restart, so we won't get here normally
+		} catch (error) {
+			console.error('Failed to apply update:', error);
+			isUpdating = false;
+		}
+	}
+
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape' && showLoginModal) {
 			closeLoginModal();
@@ -108,6 +170,36 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="container mx-auto max-w-xl p-5">
+	<!-- Update Banner -->
+	{#if updateStatus?.status === 'available' || updateStatus?.status === 'ready'}
+		<div class="alert alert-info mb-4">
+			<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+			</svg>
+			<div class="flex-1">
+				<h3 class="font-bold">Update Available</h3>
+				<p class="text-sm">Version {updateStatus.update_info?.version} is ready to install</p>
+			</div>
+			{#if updateStatus.status === 'available'}
+				<button
+					class="btn btn-sm btn-primary"
+					onclick={handleDownloadUpdate}
+					disabled={isUpdating}
+				>
+					{isUpdating ? 'Downloading...' : 'Download'}
+				</button>
+			{:else if updateStatus.status === 'ready'}
+				<button
+					class="btn btn-sm btn-primary"
+					onclick={handleApplyUpdate}
+					disabled={isUpdating}
+				>
+					{isUpdating ? 'Installing...' : 'Install & Restart'}
+				</button>
+			{/if}
+		</div>
+	{/if}
+
 	<!-- Tabs -->
 	<div role="tablist" class="tabs tabs-bordered mb-6">
 		<button
@@ -199,7 +291,7 @@
 
 	<!-- Settings Tab -->
 	{#if activeTab === 'settings'}
-		<div class="card bg-base-200">
+		<div class="card bg-base-200 mb-4">
 			<div class="card-body">
 				<h2 class="card-title text-sm font-semibold text-neutral-content uppercase tracking-wide">
 					Startup
@@ -227,6 +319,38 @@
 							/>
 							<span class="label-text">Open settings in browser on launch</span>
 						</label>
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<div class="card bg-base-200">
+			<div class="card-body">
+				<h2 class="card-title text-sm font-semibold text-neutral-content uppercase tracking-wide">
+					Updates
+				</h2>
+				{#if settings}
+					<div class="form-control">
+						<label class="label cursor-pointer justify-start gap-3">
+							<input
+								type="checkbox"
+								class="checkbox checkbox-primary"
+								checked={settings.auto_update_enabled}
+								onchange={(e) => handleSettingChange('auto_update_enabled', e.currentTarget.checked)}
+							/>
+							<span class="label-text">Check for updates automatically</span>
+						</label>
+					</div>
+					<div class="divider my-2"></div>
+					<div class="flex items-center justify-between">
+						<span class="text-sm text-neutral-content">Current version: {updateStatus?.current_version ?? serverInfo?.version ?? '1.0.0'}</span>
+						<button
+							class="btn btn-sm btn-ghost"
+							onclick={handleCheckForUpdates}
+							disabled={updateStatus?.status === 'checking'}
+						>
+							{updateStatus?.status === 'checking' ? 'Checking...' : 'Check Now'}
+						</button>
 					</div>
 				{/if}
 			</div>

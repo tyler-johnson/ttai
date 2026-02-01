@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TTAI
+Comment=TastyTrade AI Assistant
+Exec=ttai
+Icon=ttai
+Categories=Utility;Finance;
+Terminal=false
+StartupNotify=true
+X-AppImage-Version=1.0.0

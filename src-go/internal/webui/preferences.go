@@ -13,6 +13,7 @@ import (
 type Preferences struct {
 	ShowWindowOnLaunch bool `json:"open_settings_on_launch"`
 	IsFirstRun         bool `json:"is_first_run"`
+	AutoUpdateEnabled  bool `json:"auto_update_enabled"`
 }
 
 // PreferencesManager manages file-based preferences.
@@ -29,6 +30,7 @@ func NewPreferencesManager(dataDir string) *PreferencesManager {
 		prefs: Preferences{
 			ShowWindowOnLaunch: true,
 			IsFirstRun:         true,
+			AutoUpdateEnabled:  true,
 		},
 	}
 	pm.load()
@@ -105,6 +107,24 @@ func (pm *PreferencesManager) SetFirstRunComplete() {
 	}
 }
 
+// AutoUpdateEnabled returns whether auto-update is enabled.
+func (pm *PreferencesManager) AutoUpdateEnabled() bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return pm.prefs.AutoUpdateEnabled
+}
+
+// SetAutoUpdateEnabled sets whether auto-update is enabled.
+func (pm *PreferencesManager) SetAutoUpdateEnabled(enabled bool) {
+	pm.mu.Lock()
+	pm.prefs.AutoUpdateEnabled = enabled
+	pm.mu.Unlock()
+
+	if err := pm.save(); err != nil {
+		log.Printf("Failed to save preferences: %v", err)
+	}
+}
+
 // GetAll returns all preferences.
 func (pm *PreferencesManager) GetAll() Preferences {
 	pm.mu.RLock()
@@ -122,6 +142,9 @@ func (pm *PreferencesManager) Update(updates map[string]interface{}) {
 	}
 	if v, ok := updates["is_first_run"].(bool); ok {
 		pm.prefs.IsFirstRun = v
+	}
+	if v, ok := updates["auto_update_enabled"].(bool); ok {
+		pm.prefs.AutoUpdateEnabled = v
 	}
 
 	if err := pm.save(); err != nil {

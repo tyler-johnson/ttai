@@ -152,12 +152,43 @@ WINDOWS_BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION) -H windowsgui"
 build-windows: web
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build $(WINDOWS_BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-windows.exe .
 
+# Windows MSI installer (requires WiX Toolset and go-msi on Windows)
+# Install: go install github.com/mh-cbon/go-msi@latest
+# Requires: WiX Toolset v3 (https://wixtoolset.org/)
+msi: build-windows
+	@echo "Building MSI installer..."
+	go-msi make --msi $(DIST_DIR)/$(DISPLAY_NAME)-Setup.msi --version $(VERSION) --src wix.json
+	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-Setup.msi"
+
 # =============================================================================
 # Linux Build
 # =============================================================================
 
 build-linux: web
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build $(BUILD_FLAGS) -o $(DIST_DIR)/$(DISPLAY_NAME)-linux .
+
+# Linux AppImage (requires appimagetool)
+# Install: wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+appimage: build-linux
+	@echo "Building AppImage..."
+	@rm -rf $(DIST_DIR)/$(DISPLAY_NAME).AppDir
+	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).AppDir/usr/bin
+	@mkdir -p $(DIST_DIR)/$(DISPLAY_NAME).AppDir/usr/share/icons/hicolor/256x256/apps
+	@cp $(DIST_DIR)/$(DISPLAY_NAME)-linux $(DIST_DIR)/$(DISPLAY_NAME).AppDir/usr/bin/ttai
+	@cp ttai.desktop $(DIST_DIR)/$(DISPLAY_NAME).AppDir/ttai.desktop
+	@cp $(RESOURCES_DIR)/icon.png $(DIST_DIR)/$(DISPLAY_NAME).AppDir/ttai.png
+	@cp $(RESOURCES_DIR)/icon.png $(DIST_DIR)/$(DISPLAY_NAME).AppDir/usr/share/icons/hicolor/256x256/apps/ttai.png
+	@echo '#!/bin/bash' > $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@echo 'SELF=$$(readlink -f "$$0")' >> $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@echo 'HERE=$${SELF%/*}' >> $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@echo 'export PATH="$${HERE}/usr/bin:$${PATH}"' >> $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@echo 'exec "$${HERE}/usr/bin/ttai" "$$@"' >> $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@chmod +x $(DIST_DIR)/$(DISPLAY_NAME).AppDir/AppRun
+	@chmod +x $(DIST_DIR)/$(DISPLAY_NAME).AppDir/usr/bin/ttai
+	ARCH=x86_64 appimagetool --appimage-extract-and-run \
+		-u "gh-releases-zsync|tyler-johnson|ttai|latest|*x86_64.AppImage.zsync" \
+		$(DIST_DIR)/$(DISPLAY_NAME).AppDir $(DIST_DIR)/$(DISPLAY_NAME)-x86_64.AppImage
+	@echo "Created $(DIST_DIR)/$(DISPLAY_NAME)-x86_64.AppImage"
 
 # =============================================================================
 # Development Commands
@@ -212,6 +243,6 @@ deps:
 	bundle-darwin bundle-darwin-arm64 bundle-darwin-amd64 \
 	sign-darwin sign-darwin-arm64 sign-darwin-amd64 \
 	zip-darwin zip-darwin-arm64 zip-darwin-amd64 \
-	build-windows build-linux \
+	build-windows msi build-linux appimage \
 	run run-headless run-stdio run-ssl \
 	clean test fmt lint deps
