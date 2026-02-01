@@ -196,8 +196,9 @@ jobs:
         shell: pwsh
         run: |
           $VERSION = "${{ steps.version.outputs.VERSION }}"
-          # go-msi make with templates directory
-          go-msi make --path wix.json --src templates --msi dist/TTAI-Setup.msi --version $VERSION --out "$env:TEMP\go-msi-build"
+          # go-msi make with templates directory (--out must be on same drive as source files)
+          New-Item -ItemType Directory -Force -Path "go-msi-tmp"
+          go-msi make --path wix.json --src templates --msi dist/TTAI-Setup.msi --version $VERSION --out go-msi-tmp
 
       - name: Upload EXE artifact
         if: github.event_name == 'release'
