@@ -193,13 +193,12 @@ jobs:
       - name: Build MSI
         if: github.event_name == 'release'
         working-directory: src-go
-        shell: pwsh
+        shell: bash
         run: |
-          $VERSION = "${{ steps.version.outputs.VERSION }}"
-          # go-msi make - output MSI to tmp dir then copy
-          New-Item -ItemType Directory -Force -Path "go-msi-tmp"
-          go-msi make --path wix.json --src templates --msi go-msi-tmp/TTAI-Setup.msi --version $VERSION --out go-msi-tmp
-          Copy-Item "go-msi-tmp/TTAI-Setup.msi" -Destination "dist/TTAI-Setup.msi"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          # Use absolute paths with $PWD (all paths must be on same drive)
+          mkdir -p build
+          go-msi make --msi "$PWD/dist/TTAI-Setup.msi" --out "$PWD/build" --src templates --path wix.json --version "$VERSION"
 
       - name: Upload EXE artifact
         if: github.event_name == 'release'
