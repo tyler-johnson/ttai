@@ -192,12 +192,24 @@ jobs:
 
       - name: Build MSI
         if: github.event_name == 'release'
-        working-directory: src-go
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          # Update version in wix.json
-          go-msi make --msi dist/TTAI-Setup.msi --version "$VERSION" --src wix.json
+          $VERSION = "${{ steps.version.outputs.VERSION }}"
+          # Create temp directory on same drive and copy files
+          $tempDir = "C:\ttai-msi"
+          New-Item -ItemType Directory -Force -Path $tempDir
+          Copy-Item "src-go\dist\TTAI-windows.exe" -Destination "$tempDir\TTAI.exe"
+          Copy-Item "src-go\wix.json" -Destination "$tempDir\wix.json"
+          # Update wix.json to use local path
+          $wixContent = Get-Content "$tempDir\wix.json" -Raw
+          $wixContent = $wixContent -replace 'dist/TTAI-windows.exe', 'TTAI.exe'
+          Set-Content -Path "$tempDir\wix.json" -Value $wixContent
+          # Run go-msi from temp directory
+          Push-Location $tempDir
+          go-msi make --msi TTAI-Setup.msi --version $VERSION --src wix.json
+          Pop-Location
+          # Copy MSI back
+          Copy-Item "$tempDir\TTAI-Setup.msi" -Destination "src-go\dist\TTAI-Setup.msi"
 
       - name: Upload EXE artifact
         if: github.event_name == 'release'
