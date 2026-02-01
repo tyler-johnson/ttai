@@ -196,9 +196,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
+          # Convert LICENSE to RTF format for MSI
+          go-msi to-rtf --src ../LICENSE --out LICENSE.rtf
           # Use absolute paths with $PWD (all paths must be on same drive)
           mkdir -p build
-          go-msi make --msi "$PWD/dist/TTAI-Setup.msi" --out "$PWD/build" --src templates --path wix.json --version "$VERSION"
+          go-msi make --msi "$PWD/dist/TTAI-Setup.msi" --out "$PWD/build" --src templates --path wix.json --version "$VERSION" --license LICENSE.rtf
 
       - name: Upload EXE artifact
         if: github.event_name == 'release'
